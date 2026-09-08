@@ -1,8 +1,60 @@
 # Changelog
 
-All notable changes to ClaudeZero are documented here. Format follows
+All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.1] - 2026-09-08
+
+### Added
+
+- Renamed the tool from ClaudeZero to Kaizero everywhere: command, env vars, banner, docs, repo/tap.
+- Two-repository (coordination + target) launch, claim, merge, and lock model.
+- MR mode against GitHub/GitLab.
+- `--always-on`: park and resume instead of exiting when `todo.md` empties.
+- Unique exit codes for why a claude session ended.
+- `zero.sh validate-tasks`, `todo-list` task-file resolution, launch/claim Acceptance Criteria
+  checks.
+- `Co-authored-by: Kaizero` trailer on zeroed commits, with `--no-co-authorship` opt-out.
+- Styled console output with a plain-ASCII fallback.
+- Split test suite: one scenario per file, self-contained, run by its own subagent.
+
+### Changed
+
+- Single mode only: `-l/--loop` removed.
+- Task ids validated by `zero.sh` calls, never by reading `todo.md` bytes directly.
+- `ensure_owner`'s FATAL exit code moved off the range `claim` uses.
+- `merge <id> <wt> '?'` now ticks the box when the id's code already landed on base.
+- `--settings` grants the auto-mode classifier trust over claimed worktree directories.
+- Land gate now accepts `Acceptance criteria gate: failed-manual` as a valid gate note, not only
+  `passed`.
+- A markdown-link Task line (`[ID](path)`) resolves to `ID` everywhere a raw id is read.
+- `--doctor` catches a renamed gh/glab flag before an MR launch.
+
+### Fixed
+
+- Session-ending paths signal only the pid recorded at launch, never a `comm=claude` name match,
+  so an unrelated session is never SIGTERM'd.
+- Stop hook no longer ends a session on an ordinary turn or orphans a just-forked subagent, no
+  longer kills itself before reaching the owner, and no longer misreads a long tool call as a hang.
+- All session-ending paths (`on_term`, `on_hup`, `term_owner`) share one TERM-then-KILL escalation.
+- Terminal state (mouse tracking, focus reporting, alternate screen) is restored after claude is
+  killed mid-run.
+- A crashed agent's leftover uncommitted file in the coordination checkout no longer blocks every
+  later launch.
+- MR mode's `gh pr create --repo` works against a GitHub scp-style origin.
+- `run_doctor` verifies `claude` actually executes, not just that it resolves on `PATH`.
+- A Hand off surviving a network outage no longer aborts the whole run over a stale auth check.
+- Reclaiming a task from review no longer forks over an origin-only branch under the same name or
+  discovers a non-fast-forward branch only at push time.
+- `zero.sh merge`'s already-landed check runs inside `MERGE_LOCK`, not before it.
+- `mr_task` tears down its target worktree instead of leaking one per landed task.
+- A dead forge token no longer parks a review wait forever.
+- An empty `git worktree list --porcelain` no longer misdirects `COORD_ROOT`.
+- Repo-root checks compare resolved paths on both sides, not a symlink-preserving `$PWD` against a
+  resolved worktree path.
+- A test scenario can no longer lose `$TESTROOT` and write commits into the project's own checkout.
+- `claudezero --help` prints usage outside a git repository instead of dying on git's own error.
 
 ## [0.0.17] - 2026-08-04
 

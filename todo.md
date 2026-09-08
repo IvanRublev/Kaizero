@@ -22,3 +22,73 @@
 - [x] ISSUE-033 Symlink gitignored spec directories into every task worktree with `CLAUDEZERO_LINK` so a session reads the acceptance criteria its todo line points at
 - [x] ISSUE-034 Stop relaunching claude once every unchecked task is dependency-blocked, and resume the moment that changes
 - [x] ISSUE-035 Compute the context-full restart signal in ClaudeZero's own Stop hook so no third-party hook is a prerequisite
+- [x] BUG-036 Print the help screen for `-h`/`--help` outside a git repository instead of dying with git's `fatal: not a git repository`
+- [x] ISSUE-037 Move task id validation out of the zero prompt into `.git/zero.sh validate-ids`, checking the current todo and its whole git history for missing, duplicated, and reused ids
+- [x] ISSUE-037a Make `zero.sh merge` tick the task's box on the base branch itself (optional one-character outcome symbol, `[x]` default) so the agent only reads the todo file, and drop the one-box gate, the checkbox merge driver and the self-heal path (blocked by 037)
+- [x] ISSUE-038a Resolve coordination and target repository roles at launch (`COORD_ROOT`/`TARGET_ROOT`/`SAME_REPO`/`WT_PARENT`), refuse cleanly when they can't be resolved (blocked by 037a, 037, BUG-036)
+- [x] ISSUE-038b Compute a task's target branch name and its longest-id-wins matching rule from the todo blob alone (blocked by 038a)
+- [x] ISSUE-038c `claim` acquires a target worktree beside the coordination one and prints only its absolute path to the agent (blocked by 038a, 038b)
+- [x] ISSUE-038d `zero.sh merge` lands a task's code on the target base before it ticks the box on the coordination base (blocked by 038c)
+- [x] ISSUE-038e Refuse a second fleet driving a target from a different coordination point, and vice versa (blocked by 038a)
+- [x] ISSUE-038f Unify the zero prompt and docs across one and two repositories, and prove the lifecycle under adversarial replay (blocked by 038c, 038d, 038e)
+- [x] ISSUE-039a Fix `.git/zero.sh` resolving its own repository from the caller's working directory — with two repositories every lock, marker and todo read lands in the target instead of the coordination point
+- [x] ISSUE-039b Teach every todo parser to read and rewrite a multi-byte box symbol, and add the two readers that answer which symbol a box holds
+- [x] ISSUE-039c Parse and refuse `claudezero --mr` cleanly, resolve the forge in the doctor and prove the launch can reach it, and bake four values into `.git/zero.sh` (blocked by 038f)
+- [x] ISSUE-039d Add `mr_list` and `mr_create` as the only two forge calls in `zero.sh`, both non-interactive and both run in a scratch repository holding one remote (blocked by 039c)
+- [x] ISSUE-039e Build the `--mr` prompt whole, with a forge-specific describe step and a step 2.a.iv where only `[x]` unblocks (blocked by 039c)
+- [x] ISSUE-039f Fork a `--mr` task from `origin/<target base>` with one best-effort fetch per claim, outside every lock, never touching the operator's own checkout (blocked by 039c)
+- [x] ISSUE-039g `zero.sh mr` pushes the task branch to `origin`, opens or reuses one merge request for it, and lands the box as `[↑]` on the coordination base (blocked by 039a, 039b, 039c, 039d)
+- [x] ISSUE-039h `zero.sh sync-mrs` turns what reviewers did into boxes — `[x]` merged, `[⛔]` declined, `[?]` when it cannot answer — once at the top of every loop pass (blocked by 039a, 039b, 039c, 039d)
+- [x] ISSUE-039i Park the fleet for reviewers instead of exiting when requests are open and nothing is claimable, and stop the run when the forge stops answering (blocked by 039b, 039c, 039h)
+- [x] ISSUE-039j Guard `--mr` against being half-applied with two launch refusals: one fleet one mode, and `[↑]` boxes in a todo launched without the flag (blocked by 039b, 039c)
+- [x] ISSUE-039k Tell the `--mr` branch story once and plainly in the docs, and drive a whole reviewed run end to end in Scenario U (blocked by 039b, 039c, 039d, 039e, 039f, 039g, 039h, 039i, 039j)
+- [x] BUG-039l `wait_for_reviews` stop the park loop on a dead forge token instead of spinning forever
+- [x] BUG-039m Guard `COORD_ROOT`'s resolve against an empty `git worktree list` extraction instead of silently defaulting to the launch directory
+- [x] BUG-039n Move `merge_two_repos`'s already-landed check inside `MERGE_LOCK` so a racing second `merge` call can't act on a stale read
+- [x] BUG-039o Drop the unused `acquire` CLI subcommand — it skips `claim`'s branch-mismatch validation and has no caller
+- [x] BUG-039p Kill claude's whole process tree, not just its PID, so the watchdog and SIGTERM handler cannot orphan an in-flight forge/git subprocess
+- [x] BUG-039q Compare `$(pwd -P)`, not raw `$PWD`, against the resolved worktree root in the main and `--doctor --mr` repo-root checks
+- [x] BUG-039r `zero.sh mr` tear down the target worktree once its request lands, instead of leaking one per landed task
+- [x] BUG-039s `term_owner` reuse the watchdog's proven TERM→grace→KILL escalation instead of sending one bare SIGTERM with no retry
+- [x] ISSUE-039z Make a GitHub or GitLab origin default to MR mode at launch, add `--local-merge` to opt back into a same-repository merge, and refuse cleanly on an unsupported or missing origin (blocked by 039k)
+- [x] ISSUE-040 Add `--always-on` so ClaudeZero parks instead of exiting when todo.md empties, resuming the moment a new commit adds an unchecked task
+- [x] ISSUE-041 Give each exit its own unique EXIT_REASON code, written by the code path that causes it, and build the printed reason line from that one code
+- [x] ISSUE-042 Add `zero.sh todo-list` so a session discovers candidate tasks from the committed blob, not a raw read of todo.md, in every mode's prompt
+- [x] ISSUE-043 Drop the `-l/--loopprompt` mode from claudezero.sh and every test case that covers it, collapsing MODE to a single zero-mode path
+- [x] BUG-043a A lost `$TESTROOT` and a silently-failing `cd` let a test scenario write real commits into the project's own main checkout
+- [x] ISSUE-044a Make every test case assert unconditionally: require `shellcheck` and a bash 3.x binary at setup, refuse to run as root, and drop the skip verdict
+- [x] ISSUE-044b Cut every oversized test scenario along its feature seams into whole standalone scenarios, so none exceeds twice the suite median in lines, cases or assertions
+- [x] ISSUE-044c Split TEST.md into one self-contained scenario file per test under `tests/`, run each in its own subagent, and report in one format serving both a PR summary and a fixing agent
+- [x] ISSUE-044d Extract the split suite's shared setup/teardown into standalone scripts, unify every case file's format, drop stray `issue-*` references, and add a rolling-window parallel dispatch mode with a full-suite timing report
+- [x] ISSUE-046 `claudezero.sh` and README.md speak the ubiquitous language of spec-driven development in teams
+- [x] BUG-047 A network outage during a Hand off stops the whole run with `auth status failed — run gh auth login`, though the token is fine and the work is one push away from landing
+- [x] BUG-048 A task taken back from review reattaches to the stale local branch instead of the one on origin, so the next push is rejected and the task never lands again (blocked by BUG-047)
+- [x] TASK-049 `claudezero --doctor` catches a renamed gh/glab flag before a launch in MR mode, not only in CI
+- [x] TASK-050 `ensure_owner`'s FATAL moves from `exit 3` to `exit 7`, ending its collision with `claim`'s own code
+- [x] TASK-051 `zero.sh validate-tasks` resolves an id to its Task file and checks its Acceptance Criteria
+- [x] TASK-052 Launch pre-checks warn on a broken Task file instead of staying silent about it (blocked by 051)
+- [x] TASK-053 `zero.sh todo-list` hands back each candidate's resolved Task file path (blocked by 051)
+- [x] TASK-054 `zero.sh claim` re-validates id and Acceptance Criteria in task's file, catching drift the launcher's one-time check misses (blocked by 050, 051)
+- [x] TASK-055 README documents the id-check and Task-file-check split for an operator (blocked by 051, 052)
+- [x] TASK-056 Both prompts always tell claude to follow its setup, `--taskprompt` only appends alterations
+- [x] BUG-057 Ending a session picks its victim by the process name `claude`, so a hook fired outside a run SIGTERMs an unrelated editor session instead of the one ClaudeZero launched
+- [x] BUG-058 Stop hook ends claude's session on any ordinary turn end, orphaning a subagent it had just forked
+- [x] BUG-058a `arm_watchdog` kills claude mid-turn on a long busy tool call it misreads as a hang — samples only the main transcript's mtime, so a local child process (main context or subagent-spawned) or a subagent's own transcript advancing produces no signal for the whole window
+- [x] BUG-058b the Stop hook's `kill_tree` recurses into its own running pid and kills itself before ever reaching the owner it was called to signal
+- [x] ISSUE-058c Every test scenario is one self-contained shell script that cannot drift onto the project's own checkout
+- [x] BUG-058d the terminal running claudezero.sh stays corrupted after claude is killed mid-run — mouse tracking, focus reporting, and the alternate screen buffer are never reset
+- [x] TASK-058e A Task line written as a markdown link `[ID](path)` resolves to `ID` everywhere a raw first token is read as the task id
+- [x] TASK-058f `merge_task` refuses to land a Task whose gate notes or ticked-criterion evidence are missing
+- [x] BUG-058j `run_doctor` only checks `command -v claude`, never that `claude` actually executes, so a version-manager shim that resolves to no install still passes doctor and only fails as an inscrutable exit 126 at real launch
+- [x] BUG-058h a crashed agent's uncommitted file in `$COORD_ROOT` permanently blocks every subsequent launch, with no recovery path but a human editing the checkout by hand
+- [x] BUG-058i MR mode's `gh pr create --repo` fails on a GitHub scp-style origin because `ORIGIN_URL` keeps the host:path form `gh` cannot resolve
+- [x] BUG-058k `on_term` and the Stop hook's `term_owner` signal `script`'s own pid before claude's, so a TERM-killed session dies to SIGHUP instead of SIGTERM and never runs its own terminal cleanup
+- [x] TASK-059 Operator installs and runs the tool as `kaizero`; every surface says Kaizero
+- [x] BUG-059a `zero.sh merge <id> <wt> '?'` refuses to tick box when id's code already landed on base, even given a symbol
+- [x] TASK-059b Zeroing session lands a Task whose acceptance criteria gate honestly reads failed-manual
+- [x] TASK-059c Kaizero's own console output reads as one styled voice, with a plain fallback for terminals that can't render it
+- [x] BUG-059d `kaizero.sh`'s `--settings` payload should grant the auto-mode classifier trust over claimed worktree directories, to prevent edit-time prompts and denials there
+- [x] TASK-059e Zeroed commits carry a Kaizero co-author trailer (blocked by 059)
+- [?] TASK-060 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
+- [?] TASK-062 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
+- [?] TASK-063 Startup box holds the doctor's "Testing ... / ok" check lines under `Kaizero $VERSION`, and wraps the Todo/Target line onto multiple interior lines instead of overflowing the border on long repo paths

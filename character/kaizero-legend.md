@@ -1,4 +1,4 @@
-# ClaudeZero
+# Kaizero
 
 **Snow Leopard — Rare and Powerful**
 
