@@ -4,6 +4,12 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-09-08
+
+### Fixed
+
+- Swapped a Homebrew bumping action to a maintained alterantive. Unmaintained version relied on the method Homebrew itself has since removed.
+
 ## [0.1.1] - 2026-09-08
 
 ### Added
@@ -33,6 +39,10 @@ All notable changes to Kaizero are documented here. Format follows
 
 ### Fixed
 
+- `transcript_mtime` and the `newest_mtime`/tick-rewrite mode-preservation stat probes tried BSD's
+  `stat -f` before GNU's `stat -c`; GNU's `-f` silently succeeds with unrelated filesystem data
+  instead of erroring, so Linux always took the wrong, garbage-producing branch. GNU form tried
+  first now.
 - Session-ending paths signal only the pid recorded at launch, never a `comm=claude` name match,
   so an unrelated session is never SIGTERM'd.
 - Stop hook no longer ends a session on an ordinary turn or orphans a just-forked subagent, no

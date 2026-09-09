@@ -7,7 +7,7 @@
 # Run -h for usage.
 set -euo pipefail
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
 
 # lowest released version of each forge CLI known to carry every flag/field assert_forge_flags
