@@ -18,6 +18,8 @@ jobs:
       - uses: mislav/bump-homebrew-formula-action@v4
         with:
           formula-name: kaizero
+          # this tap keeps the formula at its root, not the standard Formula/kaizero.rb path
+          formula-path: kaizero.rb
           homebrew-tap: IvanRublev/homebrew-tap
           download-url: https://github.com/IvanRublev/kaizero/archive/refs/tags/${{ github.ref_name }}.tar.gz
           tag-name: ${{ github.ref_name }}
