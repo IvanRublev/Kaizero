@@ -1,7 +1,12 @@
 name: Bump Homebrew tap
 
 # On a pushed v* tag, bump url + sha256 in the tap formula.
-# Wraps `brew bump-formula-pr`. Does not build bottles or touch this repo.
+# dawidd6/action-homebrew-bump-formula@v8 (last released July 2024) calls Homebrew's own
+# `safe_system`, which Homebrew removed since — every run now dies with
+# "undefined method 'safe_system' for module Homebrew", unrelated to anything in this repo.
+# Switched to mislav/bump-homebrew-formula-action, which computes the sha256 itself from
+# download-url via the GitHub API rather than shelling out to a local `brew`, so it isn't
+# exposed to that kind of Homebrew-internals breakage.
 on:
   push:
     tags: ['v*']
@@ -10,15 +15,14 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: dawidd6/action-homebrew-bump-formula@v8
+      - uses: mislav/bump-homebrew-formula-action@v4
         with:
+          formula-name: kaizero
+          homebrew-tap: IvanRublev/homebrew-tap
+          download-url: https://github.com/IvanRublev/kaizero/archive/refs/tags/${{ github.ref_name }}.tar.gz
+          tag-name: ${{ github.ref_name }}
+          # Opens a PR on the tap rather than pushing straight to its default branch.
+          create-pullrequest: true
+        env:
           # PAT with `repo` scope on the tap repo. Store as an Actions secret.
-          token: ${{ secrets.TAP_TOKEN }}
-          tap: IvanRublev/homebrew-tap
-          formula: kaizero
-          # Push branch directly to the tap repo instead of forking (token needs write access there).
-          no_fork: true
-          # No release payload on a tag push — name the tag and commit explicitly.
-          tag: ${{ github.ref_name }}
-          revision: ${{ github.sha }}
-          # Opens a PR on the tap (no direct-push mode exists for this action).
+          COMMITTER_TOKEN: ${{ secrets.TAP_TOKEN }}
