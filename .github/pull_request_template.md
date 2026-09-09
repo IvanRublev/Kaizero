@@ -8,7 +8,7 @@ Keep it short. Delete any line that doesn't apply.
 
 ### Tests run
 
-<!-- e.g. `claude --permission-mode auto "execute TEST.md and return a report"` — paste the pass/fail summary. -->
+<!-- e.g. `claude --permission-mode auto "execute TEST.md and return a report"` — paste the suite verdict and the per-scenario PASS/FAIL table. -->
 
 ### Linked issue
 

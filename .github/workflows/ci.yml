@@ -4,6 +4,10 @@ on:
   push:
     branches: [master]
   pull_request:
+  schedule:
+    # weekly, not the push above: glab is installed unpinned (see the step below), so a rename
+    # or breaking change nobody's push happens to touch is still caught, by the calendar.
+    - cron: '17 6 * * 1'
 
 jobs:
   # Deterministic hard gate: pinned shellcheck, same result on every run.
@@ -21,9 +25,7 @@ jobs:
           curl -fsSL "$url" | tar -xJ
           bin="shellcheck-${SC_VERSION}/shellcheck"
           "$bin" --version
-          "$bin" claudezero.sh .github/smoke.sh .github/check-embedded.sh
-      - name: ShellCheck embedded scripts (zero.sh, hooks, merge driver)
-        run: SHELLCHECK="shellcheck-${SC_VERSION}/shellcheck" bash .github/check-embedded.sh
+          "$bin" kaizero.sh .github/smoke.sh .github/check-embedded.sh
 
   # OS-dependent checks: bash 3.2 syntax (macos /bin/bash is 3.2) + dependency smoke.
   utils_call_check:
@@ -36,11 +38,72 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Syntax check
-        run: /bin/bash -n claudezero.sh
+        run: /bin/bash -n kaizero.sh
 
       - name: Install flock (macOS only; Linux ships it in util-linux)
         if: runner.os == 'macOS'
         run: brew install flock
+
+      - name: Install timeout (macOS only; via coreutils, Linux ships it already)
+        if: runner.os == 'macOS'
+        run: |
+          brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Install glab (MR mode's forge CLI; gh and jq are already on GitHub-hosted runners)
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          fi
+          brew install glab
+
+      - name: Assert gh, glab and jq on PATH (MR mode's dependencies)
+        run: |
+          command -v gh   >/dev/null 2>&1 || { echo "gh not found on PATH"; exit 1; }
+          command -v glab >/dev/null 2>&1 || { echo "glab not found on PATH"; exit 1; }
+          command -v jq   >/dev/null 2>&1 || { echo "jq not found on PATH"; exit 1; }
+
+      - name: Install ShellCheck (macOS only; Linux already has it preinstalled)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck
+
+      - name: Check for a native bash 3.x
+        id: native-bash3
+        run: |
+          if [ -x /bin/bash ] && /bin/bash --version 2>/dev/null | head -1 | grep -q 'version 3\.'; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # only runs (and only saves) when there's actually something to build/cache — an
+      # unconditional cache step warns "Path(s) ... do(es) not exist" on a native-bash3 host,
+      # since bash-3.2.57/bash is never created there.
+      - name: Cache built bash 3.2 (skipped where /bin/bash is already 3.x)
+        if: steps.native-bash3.outputs.found != 'true'
+        uses: actions/cache@v5
+        with:
+          path: bash-3.2.57/bash
+          key: bash3.2.57-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Ensure bash 3.x is available (native /bin/bash today; built from source otherwise)
+        run: |
+          if [ "${{ steps.native-bash3.outputs.found }}" = true ]; then
+            echo "native /bin/bash is $(/bin/bash --version | head -1), nothing to build"
+          elif [ -x bash-3.2.57/bash ]; then
+            echo "using cached build: $(bash-3.2.57/bash --version | head -1)"
+            echo "BASH3=$PWD/bash-3.2.57/bash" >> "$GITHUB_ENV"
+          else
+            curl -fsSL https://ftp.gnu.org/gnu/bash/bash-3.2.57.tar.gz | tar xz
+            cd bash-3.2.57
+            CFLAGS="-fcommon" ./configure --without-bash-malloc >/dev/null
+            make -j"$(command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu)" >/dev/null
+            echo "BASH3=$PWD/bash" >> "$GITHUB_ENV"
+          fi
+
+      - name: ShellCheck embedded scripts against a real bash 3.x
+        run: bash .github/check-embedded.sh
 
       - name: Dependency smoke test
         run: /bin/bash .github/smoke.sh

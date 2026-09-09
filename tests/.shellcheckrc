@@ -1,0 +1,32 @@
+# Applies to every tests/*.sh (shellcheck auto-loads .shellcheckrc from the target's directory).
+# SC2016: cases literally grep shell syntax ('$FORGE', '</dev/null', ...) out of zero.sh — the
+#         single quotes are intentional, not a forgotten expansion.
+# SC2030/SC2031: every scenario deliberately scopes its own exports to one `( ... )` subshell per
+#         case, so two cases in the same file never leak state — the "modification is local"/"was
+#         modified in a subshell" pair is exactly the isolation the suite is built on.
+# SC2034: functions read across a dynamic `zero_funcs`/`. "$tmp"` source that shellcheck can't
+#         trace, so a var it calls unused is read by sourced code it never sees.
+# SC2164: `cd` is overridden by test-setup.sh to already hard-exit on failure (every subshell
+#         inherits that function) — a linter reading one file at a time can't see the override.
+# SC1091: every scenario sources test-setup.sh/test-teardown-*.sh by the same relative path;
+#         nothing to gain from resolving them per file.
+# SC2012: fixture filenames throughout this suite are ASCII and script-controlled (uuid/id
+#         strings, never attacker input), so ls|head over such a glob is fine as written.
+# SC2015: `A && B || C` is used throughout as if/then/else on purpose (B and C are mutually
+#         exclusive by construction in every such fixture site) — not a bug pattern here.
+# SC1007: `VAR= cmd` (an intentionally empty env-var prefix, e.g. KAIZERO_FORGE=) is
+#         deliberate, not a forgotten value.
+# SC2010: the project-repo residue check's `ls .git | grep ...` is carried over verbatim from
+#         TEST.md's own pre-conversion check (ISSUE-058c) — not rewritten.
+# SC2218: a few scenarios redefine a Setup helper (mkrepo/mktodo/…) partway through the file for
+#         a later case that needs a simpler/different fixture — every call before the
+#         redefinition resolves to the first definition, every call after to the second, in plain
+#         top-to-bottom execution order. shellcheck's static analysis can't see that ordering.
+# SC2317: a small number of scenarios carry a helper defined for parity with a sibling scenario
+#         (e.g. Q-001's run_hook_stderr, shared with Q-002) that this particular file's own cases
+#         don't call — pre-existing in the source .md this issue converts, not new dead code from
+#         the conversion. shellcheck flags this only once every scenario's trailing line
+#         unconditionally exits (ISSUE-058c's own report-format fix), which lets its flow analysis
+#         see the whole file, including a same-scenario helper it otherwise couldn't confirm as
+#         reachable from elsewhere.
+disable=SC2016,SC2030,SC2031,SC2034,SC2164,SC1091,SC2012,SC2015,SC1007,SC2010,SC2218,SC2317

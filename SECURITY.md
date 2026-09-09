@@ -4,7 +4,7 @@
 
 Email git@ivanrublev.me — do not open a public issue for security bugs.
 Expect a first reply within 7 days. Include repro steps and the affected
-version (see `VERSION` in `claudezero.sh`).
+version (see `VERSION` in `kaizero.sh`).
 
 ## Supported versions
 
@@ -12,7 +12,7 @@ Only the latest release gets fixes. Pre-1.0 — no backports.
 
 ## Security model — read before running
 
-ClaudeZero runs `claude --permission-mode auto`: the agent acts on your
+Kaizero runs `claude --permission-mode auto`: the agent acts on your
 machine WITHOUT per-action approval. It edits files, runs shell commands, and
 commits — unattended, in a loop. Treat every run as "I authorize this agent to
 do anything I could do at this terminal."

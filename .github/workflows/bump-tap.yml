@@ -15,7 +15,7 @@ jobs:
           # PAT with `repo` scope on the tap repo. Store as an Actions secret.
           token: ${{ secrets.TAP_TOKEN }}
           tap: IvanRublev/homebrew-tap
-          formula: claudezero
+          formula: kaizero
           # Push branch directly to the tap repo instead of forking (token needs write access there).
           no_fork: true
           # No release payload on a tag push — name the tag and commit explicitly.

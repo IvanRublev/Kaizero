@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea or improvement for ClaudeZero
+about: Suggest an idea or improvement for Kaizero
 title: ''
 labels: ''
 assignees: ''
@@ -10,7 +10,7 @@ assignees: ''
 ### Problem
 
 <!--
-What are you trying to do that ClaudeZero doesn't let you do today? Describe the pain, not just the feature.
+What are you trying to do that Kaizero doesn't let you do today? Describe the pain, not just the feature.
 -->
 
 ### Proposed solution

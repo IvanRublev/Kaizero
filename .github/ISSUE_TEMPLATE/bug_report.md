@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Create a report to help us improve ClaudeZero
+about: Create a report to help us improve Kaizero
 title: ''
 labels: ''
 assignees: ''
