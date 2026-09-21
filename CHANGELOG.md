@@ -4,6 +4,14 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-09-21
+
+### Fixed
+
+- Two-repository (coordination + target) `fork`/`take`/`reattach`/`track` worktree acquisition now
+  links `KAIZERO_LINK` from `TARGET_ROOT`, matching the root it's validated against at launch and
+  the single-repository path.
+
 ## [0.1.2] - 2026-09-08
 
 ### Fixed
