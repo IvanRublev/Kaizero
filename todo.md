@@ -90,6 +90,9 @@
 - [x] BUG-059d `kaizero.sh`'s `--settings` payload should grant the auto-mode classifier trust over claimed worktree directories, to prevent edit-time prompts and denials there
 - [x] TASK-059e Zeroed commits carry a Kaizero co-author trailer (blocked by 059)
 - [x] BUG-060 A two-repository claim never links the target worktree's own gitignored top-level material, so every tool call inside it fails
-- [?] TASK-061 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
-- [?] TASK-063 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
-- [?] TASK-064 Startup box holds the doctor's "Testing ... / ok" check lines under `Kaizero $VERSION`, and wraps the Todo/Target line onto multiple interior lines instead of overflowing the border on long repo paths
+- [ ] BUG-061 A `git merge --no-ff -m` commit's `prepare-commit-msg` hook folds the Kaizero co-author trailer into the subject line instead of the body
+- [ ] BUG-062 A-001 and T-006 assert literal test values that drifted out of sync with kaizero.sh's current output and source text
+- [ ] TASK-063 Startup box holds the doctor's "Testing ... / ok" check lines under `Kaizero $VERSION`, and wraps the Todo/Target line onto multiple interior lines instead of overflowing the border on long repo paths
+
+- [?] TASK-065 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
+- [?] TASK-067 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
