@@ -4573,7 +4573,9 @@ task_gate_file() {
 # (human needed), base left clean, branch + worktree kept; exit 5 = the land gate refused (no work,
 # borrowed work, uncommitted work, wrong branch, or
 # a human's own state) — nothing merged, nothing torn down; exit 6 = not the owning session —
-# refused before anything is merged, ticked or torn down. zero.sh is the only writer of the box,
+# refused before anything is merged, ticked or torn down; exit 9 = this session never claimed
+# raw_id in this session — refused before the exit-6 peer-lease check even runs. zero.sh is the
+# only writer of the box,
 # so there is no "your branch checked the wrong box" case to gate or self-heal here.
 # <symbol> (default x) is exactly one glyph, which may be several bytes, not a space and not `]`;
 # what it MEANS is the session's business, not zero.sh's — `?` = "landed, needs human review" is
@@ -4589,6 +4591,14 @@ merge_task() {
   # acquire epoch + instance (lines 3,4 of .owner), read before either landing removes the wt.
   # fork (line 6) is the target branch's recorded fork point, used by merge_two_repos' test 2.
   acq=""; inst=""; fork=""; o_pid=""; o_start=""; if [ -n "$wt" ] && [ -f "$wt/.owner" ]; then { read -r o_pid; read -r o_start; read -r acq; read -r inst; read -r _ || true; read -r fork || fork=""; } < "$wt/.owner" 2>/dev/null || acq=""; fi
+  # claim first: this session's own current-task marker (set_current, written by claim/release)
+  # must name n before the .owner comparison below ever runs — a mismatch here means this session
+  # never claimed n in this session at all, a self-inflicted procedural miss, not a peer holding a
+  # live lease (TASK-064). Exclusive to this case — never reused for the .owner mismatch below.
+  if [ "$(session_current "$OWNER_PID")" != "$n" ]; then
+    echo "merge $raw: not claimed by this session — run 'zero.sh claim $raw' first" >&2
+    return 9
+  fi
   # not your task: someone else's session holds this id (claim_owner is rewritten on every
   # acquire, so lines 1/2 always name whoever currently holds it) — refused before anything is
   # merged, ticked or torn down, under its own exit code so a caller can tell this from a gate
@@ -4664,7 +4674,8 @@ mr_body_add_closing_line() {
 # exit 0 = pushed & request opened/reused & box ticked `[↑]`, coordination worktree + branch
 # cleaned, target worktree torn down (branch kept); exit 2 = should not happen (see the mr prompt);
 # exit 5 = the land gate or a forge call refused — nothing handed off; exit 6 = not the owning
-# session — refused before anything is pushed, ticked or torn down.
+# session — refused before anything is pushed, ticked or torn down; exit 9 = this session never
+# claimed raw_id in this session — refused before the exit-6 peer-lease check even runs.
 mr_task() {
   local raw=$1 twt=$2 n branch wt acq inst o_pid o_start
   local mb s survivors ok cand owner untracked out existing title bodyfile
@@ -4676,6 +4687,11 @@ mr_task() {
   wt=$(wt_for_branch "$branch")
   # acquire epoch + instance (lines 3,4 of .owner), read before landing removes the wt.
   acq=""; inst=""; o_pid=""; o_start=""; if [ -n "$wt" ] && [ -f "$wt/.owner" ]; then { read -r o_pid; read -r o_start; read -r acq; read -r inst; } < "$wt/.owner" 2>/dev/null || acq=""; fi
+  # claim first — same rule and same code as merge_task's own check, above its convergence point.
+  if [ "$(session_current "$OWNER_PID")" != "$n" ]; then
+    echo "mr $raw: not claimed by this session — run 'zero.sh claim $raw' first, then retry mr" >&2
+    return 9
+  fi
   # not your task — same rule and same code as merge_task's convergence point.
   if [ -n "$o_pid" ] && { [ "$o_pid" != "$OWNER_PID" ] || [ "$o_start" != "$OWN_START" ]; }; then
     echo "mr $raw: not your task — instance ${inst:-another session} holds it" >&2
