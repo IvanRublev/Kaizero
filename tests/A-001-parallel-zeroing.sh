@@ -61,9 +61,9 @@ echo "restarts (A/B/C): $(grep -c restarting "$T/log_AGENT_A.txt") $(grep -c res
 check "instance ids" "$(grep -h -oE 'instance [^)]+' "$T"/log_AGENT_*.txt | sort -u | wc -l | tr -d ' ')" "3"
 echo "report labels   : $(grep -h -cE '  (Tasks|Kaizero run loop):' "$T"/log_AGENT_A.txt | tr -d ' ')"
 check "stale loop line" "$(grep -h -c 'Claude loops:' "$T"/log_AGENT_A.txt | tr -d ' ')" "0"
-echo "todos counted   : $(awk '/❄ TOTAL/{exit} /Tasks:.*·[[:space:]]+[0-9]+ Landed/{l=$0} END{print l}' "$T"/log_AGENT_A.txt)"
+echo "todos counted   : $(awk '/TOTAL \(/{exit} /Tasks:.*·[[:space:]]+[0-9]+ Landed/{l=$0} END{print l}' "$T"/log_AGENT_A.txt)"
 # each agent ended its run with one fleet TOTAL block
-check "TOTAL blocks" "$(grep -h -c '❄ TOTAL' "$T"/log_AGENT_*.txt | paste -sd' ' -)" "1 1 1"
+check "TOTAL blocks" "$(grep -h -c 'TOTAL (' "$T"/log_AGENT_*.txt | paste -sd' ' -)" "1 1 1"
 echo "zero.sh wrote files: $(find "$T/repo/.git" -maxdepth 1 -name 'todos-seconds-*' 2>/dev/null | wc -l | tr -d ' ')"
 echo "zero.sh wrote counts: $(find "$T/repo/.git" -maxdepth 1 -name 'todos-done-*' 2>/dev/null | wc -l | tr -d ' ')"
 # five tasks landing from three parallel instances, each ticked by zero.sh serially under

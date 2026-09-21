@@ -31,9 +31,10 @@ mktodo(){ ( cd "$1"; echo '- [ ] G1 noop' > todo.md
 # The stub echoes its own argv (same trick as Scenario L), so the exact prompt text claude is
 # launched with is captured verbatim — once per repository count — and diffed structurally
 # instead of eyeballed.
-# want 7 — definition, the same-repository MR refusal, bake line, banner, and exactly the 3
-# heredoc consultations: acquire_target, teardown_target, merge_task
-check "T21 SAME_REPO count" "$(grep -c 'SAME_REPO' "$REAL_SCRIPT")" "7"
+# want 9 — definition, the same-repository MR refusal, bake line, banner, exactly the 3
+# heredoc consultations (acquire_target, teardown_target, merge_task), a comment, and a
+# state-serialization printf
+check "T21 SAME_REPO count" "$(grep -c 'SAME_REPO' "$REAL_SCRIPT")" "9"
 # no network verbs, unconditionally: dropped — the source now carries legitimate
 # fetch/gh/origin/push words gated behind MR mode. U-001-mr-mode-launch-refusals's own absence check takes over this
 # job — stubs that fail the run if called prove none of them fire under --local-merge.
@@ -94,7 +95,7 @@ DRIVE
 bash "$T21/drive.sh" || FAILED=1
 
 
-# T21 PASS — the SAME_REPO token appears on exactly 7 lines in kaizero.sh; both
+# T21 PASS — the SAME_REPO token appears on exactly 9 lines in kaizero.sh; both
 # launches leave no @@…@@ placeholder unresolved;
 # each resolves its own todo reference and its zero.sh call to an absolute path; the two
 # captured prompt bodies (each at least 60 lines) are identical once each launch's own root is
