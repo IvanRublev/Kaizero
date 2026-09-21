@@ -139,15 +139,17 @@ DRC=$?
 
 # O2/O3/O4/O8 — checked inside drive.sh, above
 
-# O5 — characterization: the two-repository MR layout links nothing at all, and the target repository's own exclude file and config are left untouched
+# O5 — the two-repository (fork) layout links from TARGET_ROOT, same root KAIZERO_LINK was
+# validated against at launch — not from COORD_ROOT, which has no such material to offer
 mkorigin "$TO/o5code"; mkrepo "$TO/o5plan"
+( cd "$TO/o5code"; printf 'tasks/\n' > .gitignore; git add .gitignore; git commit -qm ignore-tasks )
+mkdir -p "$TO/o5code/tasks"; printf 'gitignored target spec\n' > "$TO/o5code/tasks/spec-O5-target.md"   # TARGET_ROOT's own gitignored material
 ( cd "$TO/o5plan"; printf 'tasks/\n' > .gitignore
   printf -- '- [ ] O5 task\n' > todo.md; git add -A; git commit -qm init
   mkdir tasks; printf -- '- [ ] c\n' > tasks/spec-O5.md
   printf -- '### Acceptance criteria\n- [ ] x\n' > tasks/O5.md )   # resolvable by id, claim needs one
 boot "$TO/o5code" "$TO/o5plan/todo.md"
 EXCLUDE5="$(cd "$TO/o5code" && git rev-parse --git-path info/exclude | sed "s#^#$TO/o5code/#")"
-cp "$EXCLUDE5" "$TO/o5-exclude-pre"
 
 cat > "$TO/o5drive.sh" <<'DRIVE'
 set -uo pipefail
@@ -157,20 +159,20 @@ export KAIZERO_SESSION_RECORD="$REC" KAIZERO_SESSION_EPOCH=1
 FAILED=0; ERRORED=0
 wt=$(KAIZERO_LINK=tasks bash .git/zero.sh claim O5); rc=$?
 check "O5 claim exit" "$rc" "0"
-check "O5 no link -e" "$([ -e "$wt/tasks" ] && echo NO || echo yes)" "yes"
-check "O5 no link -L" "$([ -L "$wt/tasks" ] && echo NO || echo yes)" "yes"
+check "O5 is symlink" "$([ -L "$wt/tasks" ] && echo yes || echo NO)" "yes"
+check "O5 readable" "$(cat "$wt/tasks/spec-O5-target.md" 2>/dev/null)" "gitignored target spec"
 [ "$FAILED" = 0 ] && [ "$ERRORED" = 0 ]
 DRIVE
 # shellcheck disable=SC2097,SC2098
 TO="$TO" bash "$TO/o5drive.sh"
 DRC5=$?
 [ "$DRC5" = 0 ] || FAILED=1
-check "O5 exclude untouched" "$(cmp -s "$EXCLUDE5" "$TO/o5-exclude-pre" && echo yes || echo NO)" "yes"
+check "O5 exclude entry" "$(grep -c '^/tasks$' "$EXCLUDE5")" "1"
 check "O5 no worktreeConfig ext" "$(git -C "$TO/o5code" config --get extensions.worktreeConfig >/dev/null 2>&1 && echo NO || echo yes)" "yes"
 check "O5 no core.excludesFile" "$(git -C "$TO/o5code" config --local --get core.excludesFile >/dev/null 2>&1 && echo NO || echo yes)" "yes"
-# O5 PASS — the claim completes with KAIZERO_LINK=tasks set, the task worktree carries no
-# tasks entry at all (neither -e nor -L), $TO/o5code's own info/exclude is byte-identical to its
-# pre-claim copy, and no ignore-scoping git config was written there.
+# O5 PASS — the claim completes with KAIZERO_LINK=tasks set, the target worktree carries a
+# `tasks` symlink into TARGET_ROOT (o5code), readable, with a matching entry in o5code's own
+# info/exclude, and no ignore-scoping git config was written there.
 
 # O6 — a bad KAIZERO_LINK refuses the run at startup, before any claude
 cd "$TO/repo"

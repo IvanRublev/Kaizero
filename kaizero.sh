@@ -3271,6 +3271,7 @@ link_ignored() {
     if [ ! -e "$wt/$p" ] && [ ! -L "$wt/$p" ]; then
       ln -s "$root/$p" "$wt/$p"
       grep -qxF "/$p" "$ex" 2>/dev/null || echo "/$p" >> "$ex"
+      printf '❄ Linked %s from %s\n' "$p" "$root" >&2
     fi
   done
 }
@@ -3418,10 +3419,6 @@ make_target_wt() {
       # reset or otherwise moved here.
       twt="$WT_PARENT/tt-$branch-$(uuidgen | tr -d - | head -c7)"
       "$FLOCK_BIN" "$WT_LOCK" git -C "$TARGET_ROOT" worktree prune >/dev/null 2>&1 || true
-      # No link_ignored here — this function runs only in the two-repository layout
-      # (TARGET_MODE != same), where KAIZERO_LINK's material lives in COORD_ROOT, not
-      # $TARGET_ROOT: nothing to link, so nothing is linked and $TARGET_ROOT's own exclude/config
-      # stay untouched.
       if out=$("$FLOCK_BIN" "$WT_LOCK" git -C "$TARGET_ROOT" worktree add "$twt" "$branch" 2>&1); then
         printf '%s' "$twt"; return 0
       fi
@@ -3655,6 +3652,10 @@ acquire_task() {
       release_task "$n"   # $twt (make_target_wt's git failure text) survives — release_task has its own local
       printf '%s' "$twt"; return 1
     fi
+    # two-repository case (take/reattach/fork/track alike): KAIZERO_LINK is validated at launch
+    # against $TARGET_ROOT and the single-repository call above already links from that same
+    # root — link the target worktree from it too, idempotent by construction.
+    link_ignored "$twt" "$TARGET_ROOT"
   fi
 
   # The branch's own merge-base with its base right now — recomputed on every acquire (take,
