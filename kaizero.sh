@@ -2530,7 +2530,7 @@ write_prepare_commit_msg_hook() {
 [ -n "${KAIZERO_NO_CO_AUTHORSHIP:-}" ] && exit 0
 msg_file="$1"
 grep -qF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg_file" 2>/dev/null && exit 0
-printf '\nCo-authored-by: Kaizero <noreply@kaizero.sh>\n' >> "$msg_file"
+printf '\n\nCo-authored-by: Kaizero <noreply@kaizero.sh>\n' >> "$msg_file"
 HOOK_EOF
     chmod +x "$hook"
 }
