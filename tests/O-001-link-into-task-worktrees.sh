@@ -115,6 +115,23 @@ check "O4 dangling exit" "$rc" "0"
 check "O4 dangling kept" "$([ -L "$wt4/tasks" ] && [ ! -e "$wt4/tasks" ] && echo yes || echo NO)" "yes"
 # O4 PASS — exclude dupes, link intact, dangling exit and dangling kept all report their want value.
 
+# O4b — a name already symlinked in place at claim time (an earlier claim or pre-existing worktree
+# state) still gets a startup line, worded distinctly from the newly-linked line, and an unlisted
+# name gets neither line even though it physically exists.
+mkdir -p "$TO/o4b-wt"; ( cd "$TO/o4b-wt"; git init -q -b main; git config user.email t@t.t; git config user.name test )
+( set -euo pipefail; . "$TO/li.sh"; KAIZERO_LINK=tasks,sources link_ignored "$TO/o4b-wt" "$TO/repo" ) 2>"$TO/o4b-first.err"
+( set -euo pipefail; . "$TO/li.sh"; KAIZERO_LINK=tasks link_ignored "$TO/o4b-wt" "$TO/repo" ) 2>"$TO/o4b-second.err"
+# first call: both listed names newly-linked, no already-linked line
+check "O4b first newly-linked count" "$(grep -c '❄ Linked' "$TO/o4b-first.err")" "2"
+check "O4b first no already-linked" "$(grep -c 'already linked' "$TO/o4b-first.err")" "0"
+# second call: tasks is already symlinked — distinct wording, no duplicate newly-linked line for it
+check "O4b second already-linked" "$(grep -c '❄ tasks already linked from' "$TO/o4b-second.err")" "1"
+check "O4b second no newly-linked" "$(grep -c '❄ Linked tasks from' "$TO/o4b-second.err")" "0"
+# unlisted name (sources, not in the second call's KAIZERO_LINK) prints neither line despite existing
+check "O4b unlisted silent" "$(grep -c 'sources' "$TO/o4b-second.err")" "0"
+# O4b PASS — first-call newly-linked count, first-call no already-linked, second-call already-linked,
+# second-call no newly-linked, and unlisted silent all report their want value.
+
 # O8 — todo-list's appended Task-file path is read-only and COORD_ROOT-absolute: readable with no
 # KAIZERO_LINK and no $wt at all; ticking it is a separate operation, still gated on
 # KAIZERO_LINK exactly as O2 above already proves.
