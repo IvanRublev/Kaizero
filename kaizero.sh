@@ -3317,6 +3317,8 @@ link_ignored() {
       ln -s "$root/$p" "$wt/$p"
       grep -qxF "/$p" "$ex" 2>/dev/null || echo "/$p" >> "$ex"
       printf '❄ Linked %s from %s\n' "$p" "$root" >&2
+    else
+      printf '❄ %s already linked from %s\n' "$p" "$root" >&2
     fi
   done
 }
