@@ -68,7 +68,10 @@ check "W1 says one fleet one mode" "$(echo "$out" | grep -c 'one fleet, one mode
 check "W1 refusal exit status" "$(echo "$out" | grep -cx 'RC=1')" "1"
 
 out=$(emit_mr "$TW/w1code" "$TW/w1plan/todo.md")
-check "W1 same mode (default) passes" "$(echo "$out" | grep -c 'Todo .*w1plan@main \. Target .*w1code@main')" "1"
+# two checks, not one combined pattern: TASK-063 wraps Todo/Target onto separate interior lines
+# once the combined text passes 76 columns, which a $TESTROOT-length fixture path always does.
+check "W1 same mode (default) passes Todo" "$(echo "$out" | grep -c 'Todo .*w1plan@main')" "1"
+check "W1 same mode (default) passes Target" "$(echo "$out" | grep -c 'Target .*w1code@main')" "1"
 
 # and the other direction: a local-merge peer (line4=0) refuses a default (MR-mode) launch
 printf '%s\n%s\n%s\n%s\n' "$peer" "$st" "$W1PLAN@main" "0" > "$W1CODE/.git/kaizero-instance/peer"
@@ -76,7 +79,9 @@ out=$(refuse_mr "$TW/w1code" "$TW/w1plan/todo.md")
 check "W1 default refused by a local-merge peer" "$(echo "$out" | grep -c "already driven in local-merge mode by instance peer")" "1"
 check "W1 reverse refusal exit status" "$(echo "$out" | grep -cx 'RC=1')" "1"
 out=$(emit "$TW/w1code" "$TW/w1plan/todo.md")
-check "W1 same mode (--local-merge) passes" "$(echo "$out" | grep -c 'Todo .*w1plan@main \. Target .*w1code@main')" "1"
+# two checks, not one combined pattern — same TASK-063 wrap as above.
+check "W1 same mode (--local-merge) passes Todo" "$(echo "$out" | grep -c 'Todo .*w1plan@main')" "1"
+check "W1 same mode (--local-merge) passes Target" "$(echo "$out" | grep -c 'Target .*w1code@main')" "1"
 
 kill "$peer" 2>/dev/null; wait "$peer" 2>/dev/null
 
@@ -124,17 +129,23 @@ check "W2 remedy: clear boxes by hand" "$(echo "$out" | grep -c 'or clear those 
 check "W2 refusal exit status" "$(echo "$out" | grep -cx 'RC=1')" "1"
 
 out=$(emit_mr "$TW/w2code" "$TW/w2plan/todo.md")
-check "W2 default launch unaffected" "$(echo "$out" | grep -c 'Todo .*w2plan@main \. Target .*w2code@main')" "1"
+# two checks, not one combined pattern — same TASK-063 wrap as above.
+check "W2 default launch unaffected Todo" "$(echo "$out" | grep -c 'Todo .*w2plan@main')" "1"
+check "W2 default launch unaffected Target" "$(echo "$out" | grep -c 'Target .*w2code@main')" "1"
 
 # clearing the box lets the identical --local-merge launch through
 mktodo "$TW/w2plan"
 out=$(emit "$TW/w2code" "$TW/w2plan/todo.md")
-check "W2 passes once the box is cleared" "$(echo "$out" | grep -c 'Todo .*w2plan@main \. Target .*w2code@main')" "1"
+# two checks, not one combined pattern — same TASK-063 wrap as above.
+check "W2 passes once the box is cleared Todo" "$(echo "$out" | grep -c 'Todo .*w2plan@main')" "1"
+check "W2 passes once the box is cleared Target" "$(echo "$out" | grep -c 'Target .*w2code@main')" "1"
 
 # a todo holding only [x]/[⛔]/[?] never refuses — those are outcomes, not open handoffs
 mktodo_outcomes "$TW/w2plan"
 out=$(emit "$TW/w2code" "$TW/w2plan/todo.md")
-check "W2 outcomes-only todo never refuses" "$(echo "$out" | grep -c 'Todo .*w2plan@main \. Target .*w2code@main')" "1"
+# two checks, not one combined pattern — same TASK-063 wrap as above.
+check "W2 outcomes-only todo never refuses Todo" "$(echo "$out" | grep -c 'Todo .*w2plan@main')" "1"
+check "W2 outcomes-only todo never refuses Target" "$(echo "$out" | grep -c 'Target .*w2code@main')" "1"
 # W2 PASS — a todo with one `[↑]` box refuses a `--local-merge` launch with exit status 1,
 # naming the count and both remedies; the identical todo launched by default is not refused by
 # this guard; clearing the box lets the identical `--local-merge` launch through; a todo holding
