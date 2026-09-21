@@ -6,11 +6,25 @@ All notable changes to Kaizero are documented here. Format follows
 
 ## [0.1.3] - 2026-09-21
 
+### Added
+
+- `merge`/`mr` refuse with a distinct exit code and a "claim first" message when the session never
+  claimed the task, instead of folding that case into the existing peer-conflict refusal.
+
+### Changed
+
+- Startup box now holds `run_doctor`'s MR-mode check lines and wraps a long mode-summary line onto
+  further boxed rows, instead of letting either overflow past the box border.
+
 ### Fixed
 
 - Two-repository (coordination + target) `fork`/`take`/`reattach`/`track` worktree acquisition now
   links `KAIZERO_LINK` from `TARGET_ROOT`, matching the root it's validated against at launch and
   the single-repository path.
+- `git merge --no-ff -m`'s `prepare-commit-msg` hook now always inserts a blank line before the
+  `Co-authored-by: Kaizero` trailer, so the trailer no longer folds into the merge commit subject.
+- `A-001-parallel-zeroing.sh` and `T-006-one-prompt-text-for-both-layouts.sh` no longer assert
+  stale literal output/line-count values.
 
 ## [0.1.2] - 2026-09-08
 
