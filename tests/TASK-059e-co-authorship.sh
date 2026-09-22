@@ -7,6 +7,8 @@ SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # TASK-059e-co-authorship — write_prepare_commit_msg_hook installs an idempotent, opt-outable
 # prepare-commit-msg hook into a given repo's own git dir (never the caller's cwd), and
 # mr_body_add_closing_line appends the MR closing line the same idempotent, opt-outable way.
+# TASK-069 — the hook only fires for a kaizero.sh-launched session (KAIZERO_INSTANCE set); a
+# plain shell's commit gets no trailer, and KAIZERO_NO_CO_AUTHORSHIP still overrides.
 # Needs real claude: no — both functions are exercised directly, no session is launched.
 # Tools beyond the shared prerequisites: none
 # Folder under $TESTROOT: $TESTROOT/TASK-059e-co-authorship
@@ -31,11 +33,24 @@ mkrepo "$TT/r1"
   check "hook file executable" "$([ -x "$hook" ] && echo yes || echo no)" "yes"
 
   msg="$TT/r1-msg1"; printf 'a commit\n' > "$msg"
-  "$hook" "$msg"
-  check "hook appends trailer" "$(grep -cF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg")" "1"
+  env -u KAIZERO_INSTANCE "$hook" "$msg"
+  check "no KAIZERO_INSTANCE: no trailer" "$(grep -cF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg")" "0"
+
+  msg="$TT/r1-msg2"; printf 'a commit\n' > "$msg"
+  KAIZERO_INSTANCE=x "$hook" "$msg"
+  check "KAIZERO_INSTANCE set: trailer appended" "$(grep -cF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg")" "1"
+
+  msg="$TT/r1-msg3"; printf 'a commit\n' > "$msg"
+  KAIZERO_INSTANCE=x KAIZERO_NO_CO_AUTHORSHIP=1 "$hook" "$msg"
+  check "KAIZERO_NO_CO_AUTHORSHIP overrides: no trailer" "$(grep -cF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg")" "0"
+
+  msg="$TT/r1-msg4"; printf 'a commit\n\nCo-authored-by: Kaizero <noreply@kaizero.sh>\n' > "$msg"
+  KAIZERO_INSTANCE=x "$hook" "$msg"
+  check "amend/reword idempotent: trailer not duplicated" "$(grep -cF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg")" "1"
 )
-# PASS — write_prepare_commit_msg_hook installs an executable hook in the given repo's git dir,
-# and running it appends the Kaizero trailer.
+# PASS — write_prepare_commit_msg_hook installs an executable hook in the given repo's git dir;
+# the hook only appends the Kaizero trailer for a kaizero.sh-launched session (KAIZERO_INSTANCE
+# set), honors KAIZERO_NO_CO_AUTHORSHIP as an override, and stays idempotent on reword/amend.
 
 # --- MR body closing line ---
 ( extract_fn mr_body_add_closing_line "$REAL_SCRIPT"
