@@ -250,6 +250,7 @@ The loop is yours to teach.
 
 ```sh
 kaizero [path-to-todo.md] [--local-merge] [--always-on] [-t, --taskprompt "how to process ONE Task"]
+kaizero --version
 kaizero -h
 ```
 

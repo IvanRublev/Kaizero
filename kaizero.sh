@@ -54,6 +54,7 @@ usage() {
       -e "s/@@WATCHDOG_DEFAULT@@/$WATCHDOG_DEFAULT/g" \
       -e "s/@@DEPENDENCY_WAIT_DEFAULT@@/$DEPENDENCY_WAIT_DEFAULT/g" <<'USAGE'
 usage: @@PROG@@ [todo-file-path] [--local-merge] [--always-on] [--no-co-authorship] [-t|--taskprompt TEXT]
+       @@PROG@@ --version
 version @@VERSION@@
 
   Loops claude to zero a Markdown Release Todo List — fork a worktree per Task, implement,
@@ -82,6 +83,7 @@ version @@VERSION@@
                               --local-merge stops at the generic checks and reads no
                               origin.
   -h, --help                  Show this help.
+      --version               Print the version and exit.
 
   Layout: stand in the code repository and pass the Release Todo List's path. The todo inside
   that same repository is the one-repository fork-merge layout, and runs under --local-merge
@@ -1069,6 +1071,7 @@ ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)          usage; exit 0 ;;
+    --version)          echo "$VERSION"; exit 0 ;;
     -t|--taskprompt)    [ $# -ge 2 ] || { echo "$PROG: $1 needs a value"; exit 1; }; TASK_PROMPT="$2"; shift 2 ;;
     --taskprompt=*)     TASK_PROMPT="${1#*=}"; shift ;;
     --local-merge)       LOCAL_MERGE=1; shift ;;
