@@ -105,9 +105,12 @@ if out=$(cd "$TB/notgit" && timeout 20 bash "$SCRIPT" -h 2>&1); then rc=0; else 
 if [ "$rc" = 0 ] && echo "$out" | grep -q -- '--version'; then r15=ok; else r15="rc=$rc: $out"; fi
 check "B15 help-lists-version" "$r15" "ok"
 
-# B16 — absence check: --version is never swallowed as -t/--taskprompt's value
-if out=$(cd "$TB/notgit" && timeout 20 bash "$SCRIPT" -t --version 2>&1); then rc=0; else rc=$?; fi
-if [ "$rc" != 0 ] && [ "$out" != "$EXPECTED_VERSION" ]; then r16=ok; else r16="rc=$rc: $out"; fi
+# B16 — absence check: adding --version takes nothing away from -t/--taskprompt's own
+# value-taking case. `-t --version --no-such-flag` must still read --version as -t's value and
+# then refuse --no-such-flag as the unknown option — proving the parse continued past -t rather
+# than --version winning, and refusing at the parse level, not at the git-repository guard.
+if out=$(cd "$TB/notgit" && timeout 20 bash "$SCRIPT" -t --version --no-such-flag 2>&1); then rc=0; else rc=$?; fi
+if [ "$rc" != 0 ] && echo "$out" | grep -q 'Unknown option: --no-such-flag' && [ "$out" != "$EXPECTED_VERSION" ]; then r16=ok; else r16="rc=$rc: $out"; fi
 check "B16 version-not-taskprompt-value" "$r16" "ok"
 
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"
