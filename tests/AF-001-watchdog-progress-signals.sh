@@ -23,7 +23,9 @@ git init -q -b main; git config user.email t@t.t; git config user.name test
 printf -- '- [ ] F1 x\n' > todo.md; git add -A; git commit -qm init
 
 # AF1 — a file appearing under a differently-named subdirectory of the session dir (not
-# subagents/) counts as progress
+# subagents/) counts as progress, as long as it carries a real, non-concluded turn-state record
+# (TASK-066's turn-state classifier reads content; find still walks the whole subtree regardless
+# of directory naming, exactly as session_dir_signature's replacement does)
 cd "$TF/repo"
 rm -f "$TF/af1.transcript_path"
 printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\necho "stub af1"\nprintf "%%s" "$KAIZERO_SESSION_TRANSCRIPT" > "%s/af1.transcript_path"\nsleep 15\nexit 0\n' "$TF" > "$TF/bin/claude"
@@ -32,7 +34,7 @@ chmod +x "$TF/bin/claude"
     sleep 1
     if [ -f "$TF/af1.transcript_path" ]; then
       d="$(cat "$TF/af1.transcript_path")"; d="${d%.jsonl}/otherdir"
-      mkdir -p "$d"; date +%s > "$d/marker-$i"
+      mkdir -p "$d"; printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}' > "$d/marker-$i"
     fi
   done ) > "$TF/toucher.out" 2>&1 &
 TOUCHER=$!
@@ -46,9 +48,20 @@ check "AF1 watchdog line" "$(grep -c '❄ Watchdog ·' "$TF/af1.log")" "0"
 # AF1 PASS — exit = 0, watchdog line = 0.
 
 # AF2 — CPU activity in a live descendant of CLAUDE_WRAPPER_PID (not CLAUDE_WRAPPER_PID itself) counts as
-# progress, with the transcript and session dir flat
+# progress while a tool call is outstanding, with the transcript and session dir flat past that one
+# initial "pending" record (TASK-066: descendant_cpu_signature's gate — the only state where local
+# CPU is a meaningful "still going" proxy at all, see arm_watchdog's own comment)
 cd "$TF/repo"
-printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\necho "stub af2"\n( end=$((SECONDS+15)); while [ $SECONDS -lt $end ]; do :; done ) &\nwait\nexit 0\n' > "$TF/bin/claude"
+cat > "$TF/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }
+echo "stub af2"
+mkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"
+printf '%s\n' '{"type":"assistant","message":{"stop_reason":"tool_use"}}' >> "$KAIZERO_SESSION_TRANSCRIPT"
+( end=$((SECONDS+15)); while [ $SECONDS -lt $end ]; do :; done ) &
+wait
+exit 0
+STUB
 chmod +x "$TF/bin/claude"
 PATH="$TF/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 60 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TF/af2.log" 2>&1
 # a busy descendant ticking CPU the whole time is not a hang

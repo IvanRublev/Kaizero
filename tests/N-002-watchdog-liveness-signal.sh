@@ -36,16 +36,17 @@ cd "$TN/repo"
 rm -f "$TN/n4.transcript_path"
 # claude's own pid does nothing but sleep for 3x the window — genuinely zero CPU, no forks, no
 # ticks `ps -o time=` could ever see move. A separate background process stands in for a
-# dispatched subagent, touching claude's transcript file once a second the whole time. Real
-# claude creates the transcript's parent directory itself before writing to it; the stub does the
-# same (mkdir -p) so the toucher's touch has somewhere to land — without it every touch fails
-# silently and the scenario can pass by directory-existence luck left over from an unrelated
-# earlier run.
+# dispatched subagent, appending one realistic "active" (ordinary user-role) transcript record to
+# claude's transcript file once a second the whole time — TASK-066's turn-state classifier reads
+# content, not bare mtime, so a plain `touch` no longer counts as a turn. Real claude creates the
+# transcript's parent directory itself before writing to it; the stub does the same (mkdir -p) so
+# the appender has somewhere to land — without it every append fails silently and the scenario can
+# pass by directory-existence luck left over from an unrelated earlier run.
 printf '#!/usr/bin/env bash\n[ "${1:-}" = -v ] && { echo "1.0.0 (test stub)"; exit 0; }\necho "stub idle-but-progressing"\nprintf "%%s" "$KAIZERO_SESSION_TRANSCRIPT" > "%s/n4.transcript_path"\nmkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"\nsleep 15\nexit 0\n' "$TN" > "$TN/bin/claude"
 chmod +x "$TN/bin/claude"
 ( for i in $(seq 1 25); do
     sleep 1
-    [ -f "$TN/n4.transcript_path" ] && touch "$(cat "$TN/n4.transcript_path")" 2>/dev/null
+    [ -f "$TN/n4.transcript_path" ] && printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}' >> "$(cat "$TN/n4.transcript_path")" 2>/dev/null
   done ) > "$TN/toucher.out" 2>&1 &
 TOUCHER=$!
 PATH="$TN/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 60 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TN/busy.log" 2>&1
@@ -62,14 +63,27 @@ check "N4 own exit code" "$(grep -c 'Code 0 - claude ended the turn normally' "$
 # tick — which is exactly the case a claude idling on a dispatched subagent's notification looks
 # like from the outside. Only the transcript-mtime sample tells that apart from a wedged socket.
 
-# N4alt — burning CPU alone, with no transcript progress, now also saves a claude from the watchdog (BUG 058a)
+# N4alt — burning CPU alone, with no further transcript progress, now also saves a claude from the watchdog (BUG 058a)
 cd "$TN/repo"
-# mirror of N4: burns CPU but never touches its transcript file. ISSUE 032 deliberately excluded
-# CPU time as a signal; BUG 058a (tests/AF-001-watchdog-progress-signals.sh, AF2) widened it back
-# in as one of three OR'd signals precisely because a live descendant burning CPU (a long Bash
-# tool child, or claude's own process servicing one) is not a hang either — this case now
+# mirror of N4: writes ONE outstanding-tool-call ("pending") record up front — the state a real
+# claude would have left mid a long local tool call — then burns CPU with no further transcript
+# writes at all. ISSUE 032 deliberately excluded CPU time as a signal; BUG 058a
+# (tests/AF-001-watchdog-progress-signals.sh, AF2) widened it back in as one of three OR'd signals
+# precisely because a live descendant burning CPU while a tool call is outstanding (a long Bash
+# tool child, or claude's own process servicing one) is not a hang either — TASK-066 keeps this as
+# a secondary signal, gated to fire only while a turn is genuinely pending — this case still
 # survives instead of being killed.
-printf '#!/usr/bin/env bash\n[ "${1:-}" = -v ] && { echo "1.0.0 (test stub)"; exit 0; }\necho "stub busy no transcript"\nend=$((SECONDS+15))\nwhile [ $SECONDS -lt $end ]; do :; done\nexit 0\n' > "$TN/bin/claude"; chmod +x "$TN/bin/claude"
+cat > "$TN/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-}" = -v ] && { echo "1.0.0 (test stub)"; exit 0; }
+echo "stub busy pending"
+mkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"
+printf '%s\n' '{"type":"assistant","message":{"stop_reason":"tool_use"}}' >> "$KAIZERO_SESSION_TRANSCRIPT"
+end=$((SECONDS+15))
+while [ $SECONDS -lt $end ]; do :; done
+exit 0
+STUB
+chmod +x "$TN/bin/claude"
 PATH="$TN/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 30 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TN/busynotp.log" 2>&1
 check "N4alt exit" "$?" "0"
 # CPU burn alone now resets the window
