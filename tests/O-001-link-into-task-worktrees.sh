@@ -108,6 +108,7 @@ check "O4 link intact" "$([ -L "$wt4/tasks" ] && echo yes || echo NO)" "yes"
 # DANGLING link is -L true but -e false: without the -L test the ln -s dies "File exists" on BSD
 # and GNU alike, and set -e inside acquire_task takes the whole claim down with it.
 sed -n '/^link_ignored() {/,/^}/p' "$ZERO" > "$TO/li.sh"
+printf 'session_log() { :; }\n' >> "$TO/li.sh"   # link_ignored's own logging sink, stubbed for this isolated extraction
 rm -f "$wt4/tasks"; ln -s "$TO/gone" "$wt4/tasks"
 ( set -euo pipefail; . "$TO/li.sh"; KAIZERO_LINK=tasks link_ignored "$wt4" ); rc=$?
 # the -L guard skips the name instead of failing on ln -s
