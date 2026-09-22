@@ -99,6 +99,6 @@
 - [x] TASK-067 `kaizero --version` prints the installed version and exits
 - [x] BUG-068 `merge_same_repo`'s already-landed detection matches the merge commit's subject text, so a land whose commit message doesn't literally read `merge <branch>` is invisible to it tasks/BUG-068.md
 - [x] TASK-069 A commit made outside a kaizero.sh-launched Claude session gets no Kaizero co-author trailer tasks/TASK-069.md
-- [ ] TASK-070 `PATFAIL` error line shows a valid-id example when the pattern in effect is the default tasks/TASK-070.md
+- [x] TASK-070 `PATFAIL` error line shows a valid-id example when the pattern in effect is the default tasks/TASK-070.md
 - [?] TASK-080 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-081 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
