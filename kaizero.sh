@@ -4316,15 +4316,16 @@ merge_same_repo() {
   # too — `fork` is what tells the two apart. `fork` empty (an older .owner with no fork point) skips the test.
   # BUG-059a: head==fork alone doesn't mean "no work" — a human can uncheck the box by hand after
   # an earlier, separate merge already landed this id's code. Two more facts distinguish that from
-  # a genuinely untouched claim: the box's current symbol no longer matches the target, AND a
-  # "merge $branch" commit (task_branch is deterministic per id, so this exact message recurs
-  # every time this id lands) is already in COORD_BASE's history. Both true → the code is already
-  # on base, only the tick is missing — skip the code merge and go straight to tick_box below.
-  # Either false — box already matches, or this id never landed before — refuse exactly as today.
+  # a genuinely untouched claim: the box's current symbol no longer matches the target, AND
+  # $branch's tip is already reachable from COORD_BASE (BUG-068: ancestry, not a commit-subject
+  # text match — reachability holds regardless of merge strategy, commit message, or which tool
+  # landed it). Both true → the code is already on base, only the tick is missing — skip the code
+  # merge and go straight to tick_box below. Either false — box already matches, or this id never
+  # landed before — refuse exactly as today.
   head=$(git -C "$COORD_ROOT" rev-parse "$branch")
   if [ -n "$fork" ] && [ "$head" = "$fork" ]; then
     cur=$(box_symbol_on_base "$raw") || cur=""
-    if [ "$cur" != "$sym" ] && git -C "$COORD_ROOT" log --format=%s "$COORD_BASE" | grep -Fxq "merge $branch"; then
+    if [ "$cur" != "$sym" ] && git -C "$COORD_ROOT" merge-base --is-ancestor "$branch" "$COORD_BASE"; then
       skip_code_merge=1
     else
       exec 10>&-
