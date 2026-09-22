@@ -1734,10 +1734,12 @@ transcript_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null 
 # (find walks the whole subtree, so a subagent of a subagent is included the same way) — so a
 # write anywhere under that directory is as much "something happened" as the main transcript
 # growing. Combined mtime signature of $1 (the main transcript) plus every file under $2 (its
-# session dir), one line per file: this is a pure CHANGE detector, nothing more — turn_tree_state
-# (below) is what says whether a detected change reflects a turn still running or one that just
-# concluded. TASK-066: superseded the old session_dir_signature as an independent reset source;
-# folded in here as one input among several, never called on its own to reset the watchdog window.
+# session dir), one line per file: this is a pure CHANGE detector, nothing more. TASK-066: a
+# `pending` turn (an outstanding LOCAL tool call — the one state where "nothing new was written"
+# is still expected and legitimate, e.g. a lock wait) never needs this signal to reset the window;
+# only an `active` turn (waiting on the OTHER side to answer, the shape an unrecovered API error
+# leaves behind) needs it, to tell "a fresh active record just arrived" from "the same stale active
+# record has sat unanswered the whole window" — the latter must decay towards a kill.
 tree_write_signature() {
   local tp=$1 sdir=$2 f
   printf '%s %s\n' "$(transcript_mtime "$tp")" "$tp"
@@ -1753,9 +1755,7 @@ tree_write_signature() {
 # must never reach an O(n^2) matcher — this function only ever does bounded `grep`/`case` glob
 # matching, never awk against a long line, for the same reason):
 #   pending   - an assistant message dispatched a tool call with no result recorded yet (mid-turn,
-#               genuinely working — the ONLY state descendant_cpu_signature's gate, in
-#               arm_watchdog, treats as worth corroborating with CPU ticking: it is the one state
-#               where local CPU activity is a meaningful proxy for "still going" at all)
+#               genuinely working)
 #   active    - an ordinary user-role record (a fresh prompt, or a tool_result) that the OTHER side
 #               (claude) has not yet answered
 #   concluded - an assistant message with any terminal stop_reason (ordinary end_turn, an
@@ -1784,8 +1784,9 @@ turn_record_class() {
 
 # TASK-066: sets globals TURN_ACTIVE (1 if the main session or any subagent, at any depth, is
 # currently pending or active — nothing in the tree has concluded) and TURN_PENDING (1 if the main
-# session or any subagent specifically has an outstanding LOCAL tool call right now). Bash 3.2 has
-# no associative arrays / namerefs, so these are plain globals rather than an out-parameter —
+# session or any subagent specifically has an outstanding LOCAL tool call right now — the one state
+# arm_watchdog resets on unconditionally, no accompanying write required). Bash 3.2 has no
+# associative arrays / namerefs, so these are plain globals rather than an out-parameter —
 # arm_watchdog is this function's only caller, sampling once per tick, so there is no reentrancy to
 # guard against. $3 (marker) is the Stop-hook turn marker for the MAIN session only: when its mtime
 # is at least as new as the main transcript's own, the hook has already confirmed this turn
@@ -1815,19 +1816,6 @@ turn_tree_state() {
       active)  TURN_ACTIVE=1 ;;
     esac
   done < <(find "$sdir" -type f 2>/dev/null)
-}
-
-# BUG 058a: a long-running Bash tool child (main turn or inside a subagent) writes to no
-# transcript between its own start and result, even while it and claude's own process keep
-# burning real CPU managing it. Signature of every live descendant of $1 (never $1 itself — it is
-# the pty wrapper, matching kill_tree_descendants's own exclusion): "pid cputime" per line. Either
-# a ticking CPU time or the descendant set itself changing (a child starting or exiting) changes it.
-descendant_cpu_signature() {
-  local pid=$1 child
-  for child in $(ps -Ao pid=,ppid= 2>/dev/null | awk -v p="$pid" '$2==p{print $1}'); do
-    descendant_cpu_signature "$child"
-    printf '%s %s\n' "$child" "$(ps -o time= -p "$child" 2>/dev/null | tr -d ' ')"
-  done
 }
 
 # util-linux's `script -qc CMD FILE` takes CMD as one shell string, re-parsed by a shell
@@ -1864,42 +1852,40 @@ build_claude_cmd_string() {
 # leave unattended. TASK-066: the window resets only when a tracked turn is judged currently
 # running — sampled fresh every tick, independently for the main session and for every live
 # subagent at any lineage depth, via turn_tree_state — never from raw transcript/session-dir mtime
-# alone (BUG-058a's old three-OR'd-signal model: a background helper process spawning and exiting
-# on its own cadence, unrelated to any real progress, could change the CPU signature forever and
-# defeat the window indefinitely). Two things reset `left`, both computed each tick:
-#   - a write happened SOMEWHERE in the tree (tree_write_signature changed) AND turn_tree_state
-#     says something is still pending/active — i.e. the write reflects ongoing work, not the
-#     tree settling into "everything concluded" (that specific write must NOT re-arm the window,
-#     or a genuinely concluded turn would never decay towards a kill).
-#   - descendant_cpu_signature changed, gated to fire ONLY while TURN_PENDING is set (an
-#     outstanding LOCAL tool call somewhere in the tree) — the one state where a live child's CPU
-#     is a meaningful "still going" proxy at all, and the one this task's own repro needs: a long
-#     tool call that writes nothing to any transcript for its whole duration. Once nothing in the
-#     tree is pending, CPU changes from unrelated child churn are ignored entirely — closing the
-#     exact gap BUG-058a's blind OR left open.
+# alone, and never corroborated by descendant CPU (BUG-058a's old three-OR'd-signal model: a
+# background helper process spawning and exiting on its own cadence, unrelated to any real
+# progress, could change the CPU signature forever and defeat the window indefinitely; reopened
+# because requiring CPU on top of turn state also killed a genuinely `pending` turn blocked on a
+# CPU-free lock wait). Two things reset `left`, both computed each tick from turn_tree_state alone:
+#   - TURN_PENDING (an outstanding LOCAL tool call somewhere in the tree) resets unconditionally,
+#     no write or CPU change required on top of it — a lock wait or any other I/O-bound tool call
+#     is never killed for as long as it stays pending, however long, however it's spending that time.
+#   - TURN_ACTIVE without TURN_PENDING (something in the tree is waiting on the OTHER side to
+#     answer — the shape an unrecovered API/network error leaves behind, since it strikes between a
+#     user/tool_result write and the next assistant response) resets only when tree_write_signature
+#     changed since the last tick — i.e. a FRESH active record just arrived, not the same stale one
+#     sitting unanswered. Without this, a turn stuck "active" forever (nothing ever answers it)
+#     would reset every tick from its own unchanging classification alone and never decay.
+# Once every tracked turn has concluded (TURN_ACTIVE=0), neither branch can fire — no residual
+# write-signature change or child-process CPU churn can resume resetting the window; only a fresh
+# turn becoming pending or active does.
 arm_watchdog() {
   WATCHDOG_PID=""
   [ "$WATCHDOG_SECS" -gt 0 ] || return 0
   local pid=$1 tp=$2 epoch=$3
   {
-    local left=$WATCHDOG_SECS sdir marker sig siglast cts clast
+    local left=$WATCHDOG_SECS sdir marker sig siglast
     sdir="${tp%.jsonl}"
     marker="${STOP_MARKER_FILE:-}"
     siglast="$(tree_write_signature "$tp" "$sdir")"
-    clast="$(descendant_cpu_signature "$pid")"
     while [ "$left" -gt 0 ] && kill -0 "$pid" 2>/dev/null; do
       sleep "$WAIT_TICK"; left=$((left - WAIT_TICK))
       sig="$(tree_write_signature "$tp" "$sdir")"
       turn_tree_state "$tp" "$sdir" "$marker"
-      if [ "$sig" != "$siglast" ] && [ "$TURN_ACTIVE" = 1 ]; then
+      if [ "$TURN_PENDING" = 1 ] || { [ "$TURN_ACTIVE" = 1 ] && [ "$sig" != "$siglast" ]; }; then
         left=$WATCHDOG_SECS
       fi
       siglast="$sig"
-      cts="$(descendant_cpu_signature "$pid")"
-      if [ "$TURN_PENDING" = 1 ] && [ "$cts" != "$clast" ]; then
-        left=$WATCHDOG_SECS
-      fi
-      clast="$cts"
     done
     # BUG 058k: the decision to act stops here — progress-detection is arm_watchdog's own concern
     # and stays above, but validating the launch, TERM-then-KILL, and the snapshot sweep are now
