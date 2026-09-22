@@ -143,6 +143,25 @@ grading is not.
 `tests/test-setup.sh`, `tests/test-teardown-reap.sh`, `tests/test-teardown-delete.sh` and
 `tests/test-runner.sh` are the four scripts every scenario and every run of the suite depends on.
 
+A full-suite run routinely exceeds a single Bash call's timeout budget, so `tests/test-runner.sh`
+runs backgrounded. Wait for it with the `Monitor` tool, filtered to batch once per 50 completed
+scenarios, FAIL/ERROR and the final SUITE/wall-clock/residue lines still immediate:
+
+```
+tail -n +1 -f "$LOG" | awk '
+/FAIL|ERROR/ { print; fflush(); next }
+/ done \(/ {
+  n++; buf = buf $0 "\n"
+  if (n % 50 == 0) { print buf; buf=""; fflush() }
+  next
+}
+/SUITE|wall-clock|residue/ { print; fflush() }
+'
+```
+
+After the runner exits, read the tail of `$LOG` directly for the last few scenarios' verdicts —
+the final partial batch may not flush.
+
 ## Report format
 
 For each scenario:
