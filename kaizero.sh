@@ -7,7 +7,7 @@
 # Run -h for usage.
 set -euo pipefail
 
-VERSION="0.1.3"
+VERSION="0.1.4"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
 
 # lowest released version of each forge CLI known to carry every flag/field assert_forge_flags
@@ -34,7 +34,7 @@ WAIT_TICK="${KAIZERO_WAIT_TICK:-5}" # seconds between claimable-Task probes whil
 WAIT_FRAME=1         # seconds per spinner frame on a terminal — one |/-\ revolution every 4
 WAIT_STEP=5          # seconds the terminal's elapsed clock advances in — at 1Hz a live clock is noise
 LOG_TICK="${KAIZERO_LOG_TICK:-20}" # seconds between waiting lines when stdout is a log or a pipe, not a terminal
-WATCHDOG_DEFAULT=15m # KAIZERO_WATCHDOG default: how long claude may burn no CPU before it is killed
+WATCHDOG_DEFAULT=1m # KAIZERO_WATCHDOG default: how long claude may burn no CPU before it is killed
 WATCHDOG_GRACE="${KAIZERO_WATCHDOG_GRACE:-10}" # seconds the watchdog waits after its SIGTERM before escalating to SIGKILL
 DEPENDENCY_WAIT_DEFAULT=10m # KAIZERO_DEPENDENCY_WAIT default: ceiling on the no-claim wait below
 REVIEW_POLL_DEFAULT=5m      # KAIZERO_REVIEW_POLL default: how often a park syncs the forge
@@ -54,6 +54,7 @@ usage() {
       -e "s/@@WATCHDOG_DEFAULT@@/$WATCHDOG_DEFAULT/g" \
       -e "s/@@DEPENDENCY_WAIT_DEFAULT@@/$DEPENDENCY_WAIT_DEFAULT/g" <<'USAGE'
 usage: @@PROG@@ [todo-file-path] [--local-merge] [--always-on] [--no-co-authorship] [-t|--taskprompt TEXT]
+       @@PROG@@ --version
 version @@VERSION@@
 
   Loops claude to zero a Markdown Release Todo List — fork a worktree per Task, implement,
@@ -82,6 +83,7 @@ version @@VERSION@@
                               --local-merge stops at the generic checks and reads no
                               origin.
   -h, --help                  Show this help.
+      --version               Print the version and exit.
 
   Layout: stand in the code repository and pass the Release Todo List's path. The todo inside
   that same repository is the one-repository fork-merge layout, and runs under --local-merge
@@ -951,6 +953,7 @@ while true; do
             KAIZERO_SESSION_LOG="$SESSION_LOG_FILE" \
             KAIZERO_NO_CO_AUTHORSHIP="${KAIZERO_NO_CO_AUTHORSHIP:-}" \
             bash -c 'trap "" TERM; exec "$@"' term-ignoring-wrapper \
+            env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION \
             script -q /dev/null claude "${CLAUDE_ARGS[@]}" "$PROMPT" >&4 2>&4 <&3 &
     else
         CLAUDE_CMD="$(build_claude_cmd_string "${CLAUDE_ARGS[@]}" "$PROMPT")"
@@ -962,6 +965,7 @@ while true; do
             KAIZERO_SESSION_LOG="$SESSION_LOG_FILE" \
             KAIZERO_NO_CO_AUTHORSHIP="${KAIZERO_NO_CO_AUTHORSHIP:-}" \
             bash -c 'trap "" TERM; exec "$@"' term-ignoring-wrapper \
+            env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION \
             script -qc "$CLAUDE_CMD" /dev/null >&4 2>&4 <&3 &
     fi
     CLAUDE_WRAPPER_PID=$!
@@ -971,7 +975,7 @@ while true; do
     # the same directory already carries EXIT_REASON_FILE/SAFE_TO_EXIT_FILE with no separate guard.
     session_record_write "$CLAUDE_WRAPPER_PID" "$SESSION_EPOCH" || true
     cd "$COORD_ROOT"
-    arm_watchdog "$CLAUDE_WRAPPER_PID" "$SESSION_TRANSCRIPT" "$SESSION_EPOCH"
+    arm_watchdog "$CLAUDE_WRAPPER_PID" "$SID" "$SESSION_EPOCH"
     # backgrounded on purpose: bash defers every trap until a FOREGROUND child exits, so a TERM
     # arriving while claude hangs could never be handled. `wait` IS interruptible — it returns
     # 128+N when a trapped signal fires — so re-enter it until claude is actually gone.
@@ -1069,6 +1073,7 @@ ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)          usage; exit 0 ;;
+    --version)          echo "$VERSION"; exit 0 ;;
     -t|--taskprompt)    [ $# -ge 2 ] || { echo "$PROG: $1 needs a value"; exit 1; }; TASK_PROMPT="$2"; shift 2 ;;
     --taskprompt=*)     TASK_PROMPT="${1#*=}"; shift ;;
     --local-merge)       LOCAL_MERGE=1; shift ;;
@@ -1485,6 +1490,13 @@ SESSION_RECORD_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/claude-ses
 # per-iteration boundary. Same <kind>-<base>-<instance> naming and GC rule as the files above.
 SESSION_LOG_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/session-log-${COORD_BASE//\//-}-$INSTANCE_ID"
 : > "$SESSION_LOG_FILE"
+# TASK-066: touched by the Stop hook on every real firing. Its mtime, compared against the main
+# transcript's own, is the authoritative "the Stop hook already confirmed THIS turn concluded"
+# signal arm_watchdog's turn-state check prefers over a transcript-parsed guess. Same
+# <kind>-<base>-<instance> naming and GC rule as the files above — the hook derives this exact path
+# from KAIZERO_EXIT_REASON at runtime (see its own comment) rather than through a dedicated new
+# KAIZERO_* env var, since the two files already share this directory and naming scheme.
+STOP_MARKER_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/turn-concluded-${COORD_BASE//\//-}-$INSTANCE_ID"
 ZERO_SH="$GITDIR_ABS/zero.sh"   # where build_zero_prompt wrote the helper
 INSTANCE_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)/instance"
 
@@ -1564,6 +1576,19 @@ fi
 # reach a branch that signals — declining here is silent on both streams, on purpose: this hook has
 # no console of its own to speak on, and a session it has no standing to end deserves no trace at all.
 [ -n "${KAIZERO_INSTANCE:-}" ] || exit 0
+# TASK-066: this hook only ever runs when Claude Code's own Stop event fires — i.e. exactly when a
+# turn has genuinely concluded (never between tool calls within a turn). Touch the per-instance
+# turn marker unconditionally, on every branch below, so arm_watchdog can compare its mtime against
+# the transcript's own and trust the hook's verdict over a transcript-parsed guess for the newest
+# content. No new KAIZERO_* env var for this: the marker's path is derived from KAIZERO_EXIT_REASON
+# (same directory, same <slug>-<instance> suffix, just kaizero.sh's own "turn-concluded-" prefix in
+# place of "claude-exit-reason-" — see STOP_MARKER_FILE's own definition in kaizero.sh). Best-effort:
+# an unwritable marker degrades to the transcript-only reading, never the turn.
+mf=""
+if [ -n "${KAIZERO_EXIT_REASON:-}" ]; then
+  mf="${KAIZERO_EXIT_REASON%/*}/turn-concluded-${KAIZERO_EXIT_REASON##*/claude-exit-reason-}"
+fi
+[ -n "$mf" ] && { : > "$mf"; } 2>/dev/null
 # process start-time (via ps): pins identity so a RECYCLED pid isn't mistaken for the same session.
 # Spelled identically in kaizero.sh's own copy and in the emitted zero.sh — see either's comment.
 # BUG 058k: the ONLY thing this hook may signal is the pid named by KAIZERO_SESSION_RECORD — the
@@ -1704,30 +1729,108 @@ parse_dur() {
 # since the transcript keeps growing either way.
 transcript_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true; }   # GNU first: GNU's own -f means filesystem-status and silently succeeds on a bogus %m, so a BSD-first order never falls through
 
-# BUG 058a: a subagent writes only to its own subagents/agent-*.jsonl under the SAME session
-# directory as the main transcript, never to the main transcript itself — so "progress" widens to
-# any file anywhere under that directory, not the main transcript alone and not hard-coded to the
-# subagents/*.jsonl naming convention. Signature of every file under $1 (mtime + path, one per
-# line): a new file appearing or an existing one changing either changes it.
-session_dir_signature() {
-  local dir=$1 f
-  [ -d "$dir" ] || return 0
-  while IFS= read -r f; do
-    printf '%s %s\n' "$(transcript_mtime "$f")" "$f"
-  done < <(find "$dir" -type f 2>/dev/null | sort)
+# find_session_transcript SID -> the real transcript path Claude Code is writing for this
+# --session-id, discovered rather than predicted. Claude Code names the LEAF file after the
+# session id it was given (a value kaizero.sh itself mints and controls), but the PARENT
+# directory's name is Claude Code's own undocumented encoding of the launch cwd — a naive
+# slash-to-dash reimplementation of that encoding silently drifts from reality (e.g. a cwd with a
+# dotfile-style path segment: Claude Code's real project dir also folds that leading "." into a
+# second "-", a rule kaizero.sh's own encoding never matched — the false watchdog kill this
+# function exists to fix). Globbing for the known, controlled leaf name across every project
+# directory sidesteps needing to know Claude Code's encoding at all, so a future change to it
+# breaks nothing here. mindepth/maxdepth 2 bounds the search to exactly project-dir/session.jsonl,
+# never deeper. Prints nothing (not an error) until Claude Code has actually created the file.
+find_session_transcript() {
+  find "$HOME/.claude/projects" -mindepth 2 -maxdepth 2 -name "$1.jsonl" 2>/dev/null | head -n 1
 }
 
-# BUG 058a: a long-running Bash tool child (main turn or inside a subagent) writes to no
-# transcript between its own start and result, even while it and claude's own process keep
-# burning real CPU managing it. Signature of every live descendant of $1 (never $1 itself — it is
-# the pty wrapper, matching kill_tree_descendants's own exclusion): "pid cputime" per line. Either
-# a ticking CPU time or the descendant set itself changing (a child starting or exiting) changes it.
-descendant_cpu_signature() {
-  local pid=$1 child
-  for child in $(ps -Ao pid=,ppid= 2>/dev/null | awk -v p="$pid" '$2==p{print $1}'); do
-    descendant_cpu_signature "$child"
-    printf '%s %s\n' "$child" "$(ps -o time= -p "$child" 2>/dev/null | tr -d ' ')"
-  done
+# BUG 058a: a subagent writes only to its own subagents/agent-*.jsonl under the SAME session
+# directory as the main transcript, never to the main transcript itself, at any lineage depth
+# (find walks the whole subtree, so a subagent of a subagent is included the same way) — so a
+# write anywhere under that directory is as much "something happened" as the main transcript
+# growing. Combined mtime signature of $1 (the main transcript) plus every file under $2 (its
+# session dir), one line per file: this is a pure CHANGE detector, nothing more. TASK-066: a
+# `pending` turn (an outstanding LOCAL tool call — the one state where "nothing new was written"
+# is still expected and legitimate, e.g. a lock wait) never needs this signal to reset the window;
+# only an `active` turn (waiting on the OTHER side to answer, the shape an unrecovered API error
+# leaves behind) needs it, to tell "a fresh active record just arrived" from "the same stale active
+# record has sat unanswered the whole window" — the latter must decay towards a kill.
+tree_write_signature() {
+  local tp=$1 sdir=$2 f
+  printf '%s %s\n' "$(transcript_mtime "$tp")" "$tp"
+  [ -d "$sdir" ] || return 0
+  while IFS= read -r f; do
+    printf '%s %s\n' "$(transcript_mtime "$f")" "$f"
+  done < <(find "$sdir" -type f 2>/dev/null | sort)
+}
+
+# TASK-066: classify the LAST assistant/user record in transcript $1 — tail-bounded to the same
+# 262144 bytes the Stop hook's own context-rot guard uses (see compact-exit-hook.sh's emitted
+# comment for why: cost stays flat regardless of transcript size, and a record padded past the cap
+# must never reach an O(n^2) matcher — this function only ever does bounded `grep`/`case` glob
+# matching, never awk against a long line, for the same reason):
+#   pending   - an assistant message dispatched a tool call with no result recorded yet (mid-turn,
+#               genuinely working)
+#   active    - an ordinary user-role record (a fresh prompt, or a tool_result) that the OTHER side
+#               (claude) has not yet answered
+#   concluded - an assistant message with any terminal stop_reason (ordinary end_turn, an
+#               unrecovered-API-error's synthetic record, refusal, max_tokens, ...), a
+#               user-interrupted turn ("[Request interrupted by user..."), or no relevant record
+#               at all (missing/unreadable file, or nothing written yet) — degrade, never lie: no
+#               positive evidence of a running turn is the safe default.
+turn_record_class() {
+  local file=$1 line
+  [ -f "$file" ] || { printf 'concluded'; return; }
+  line="$(tail -c 262144 "$file" 2>/dev/null | grep -aE '"type":"(assistant|user)"' | tail -n 1)"
+  case "$line" in
+    *'"type":"assistant"'*)
+      case "$line" in
+        *'"stop_reason":"tool_use"'*) printf 'pending' ;;
+        *)                            printf 'concluded' ;;
+      esac ;;
+    *'"type":"user"'*)
+      case "$line" in
+        *'[Request interrupted'*) printf 'concluded' ;;
+        *)                        printf 'active' ;;
+      esac ;;
+    *) printf 'concluded' ;;
+  esac
+}
+
+# TASK-066: sets globals TURN_ACTIVE (1 if the main session or any subagent, at any depth, is
+# currently pending or active — nothing in the tree has concluded) and TURN_PENDING (1 if the main
+# session or any subagent specifically has an outstanding LOCAL tool call right now — the one state
+# arm_watchdog resets on unconditionally, no accompanying write required). Bash 3.2 has no
+# associative arrays / namerefs, so these are plain globals rather than an out-parameter —
+# arm_watchdog is this function's only caller, sampling once per tick, so there is no reentrancy to
+# guard against. $3 (marker) is the Stop-hook turn marker for the MAIN session only: when its mtime
+# is at least as new as the main transcript's own, the hook has already confirmed this turn
+# concluded for the newest content, and that verdict is trusted over a transcript-parsed guess —
+# the one case this can matter is an end-of-turn event the tail-bounded parse above has not
+# resolved yet (AC: "judged concluded ... even where a transcript-level end-of-turn event has not
+# yet been parsed"). No such hook exists for a subagent (Claude Code fires Stop for the main agent
+# only), so a subagent's state always comes straight from its own transcript.
+turn_tree_state() {
+  local tp=$1 sdir=$2 marker=$3 c f mmt tmt
+  TURN_ACTIVE=0; TURN_PENDING=0
+  mmt="$(transcript_mtime "$marker")"; tmt="$(transcript_mtime "$tp")"
+  if [ -n "$marker" ] && [ -n "$mmt" ] && [ -n "$tmt" ] && [ "$mmt" -ge "$tmt" ] 2>/dev/null; then
+    c=concluded
+  else
+    c="$(turn_record_class "$tp")"
+  fi
+  case "$c" in
+    pending) TURN_ACTIVE=1; TURN_PENDING=1 ;;
+    active)  TURN_ACTIVE=1 ;;
+  esac
+  [ -d "$sdir" ] || return 0
+  while IFS= read -r f; do
+    c="$(turn_record_class "$f")"
+    case "$c" in
+      pending) TURN_ACTIVE=1; TURN_PENDING=1 ;;
+      active)  TURN_ACTIVE=1 ;;
+    esac
+  done < <(find "$sdir" -type f 2>/dev/null)
 }
 
 # util-linux's `script -qc CMD FILE` takes CMD as one shell string, re-parsed by a shell
@@ -1761,28 +1864,49 @@ build_claude_cmd_string() {
 # retires its timer within a tick — an armed sleeper outliving its claude would eventually fire at
 # a pid the OS has since handed to somebody else.
 # The sample is not wall clock: a flat cap would kill the honest long runs this loop is built to
-# leave unattended. BUG 058a: it is not the main transcript's mtime alone either — three signals
-# are OR'd (transcript_mtime, session_dir_signature, descendant_cpu_signature below), since a
-# subagent progressing its own file, or a live Bash-tool-child ticking CPU, is as much "not hung"
-# as the main transcript growing. Any one of the three advancing restarts the full window.
+# leave unattended. TASK-066: the window resets only when a tracked turn is judged currently
+# running — sampled fresh every tick, independently for the main session and for every live
+# subagent at any lineage depth, via turn_tree_state — never from raw transcript/session-dir mtime
+# alone, and never corroborated by descendant CPU (BUG-058a's old three-OR'd-signal model: a
+# background helper process spawning and exiting on its own cadence, unrelated to any real
+# progress, could change the CPU signature forever and defeat the window indefinitely; reopened
+# because requiring CPU on top of turn state also killed a genuinely `pending` turn blocked on a
+# CPU-free lock wait). Two things reset `left`, both computed each tick from turn_tree_state alone:
+#   - TURN_PENDING (an outstanding LOCAL tool call somewhere in the tree) resets unconditionally,
+#     no write or CPU change required on top of it — a lock wait or any other I/O-bound tool call
+#     is never killed for as long as it stays pending, however long, however it's spending that time.
+#   - TURN_ACTIVE without TURN_PENDING (something in the tree is waiting on the OTHER side to
+#     answer — the shape an unrecovered API/network error leaves behind, since it strikes between a
+#     user/tool_result write and the next assistant response) resets only when tree_write_signature
+#     changed since the last tick — i.e. a FRESH active record just arrived, not the same stale one
+#     sitting unanswered. Without this, a turn stuck "active" forever (nothing ever answers it)
+#     would reset every tick from its own unchanging classification alone and never decay.
+# Once every tracked turn has concluded (TURN_ACTIVE=0), neither branch can fire — no residual
+# write-signature change or child-process CPU churn can resume resetting the window; only a fresh
+# turn becoming pending or active does.
 arm_watchdog() {
   WATCHDOG_PID=""
   [ "$WATCHDOG_SECS" -gt 0 ] || return 0
-  local pid=$1 tp=$2 epoch=$3
+  local pid=$1 sid=$2 epoch=$3
   {
-    local left=$WATCHDOG_SECS ts last sdir dts dlast cts clast
-    sdir="${tp%.jsonl}"
-    last="$(transcript_mtime "$tp")"
-    dlast="$(session_dir_signature "$sdir")"
-    clast="$(descendant_cpu_signature "$pid")"
+    local left=$WATCHDOG_SECS tp sdir marker sig siglast
+    marker="${STOP_MARKER_FILE:-}"
+    # $tp is re-discovered every tick, never trusted from an earlier tick or predicted up front —
+    # see find_session_transcript's own comment: Claude Code may not have created the file yet on
+    # an early tick (this degrades the same as a missing file always has, never a new failure
+    # mode), and re-globbing is as cheap as the descendant-tree walks this same loop already does
+    # every tick elsewhere in this file.
+    tp="$(find_session_transcript "$sid")"; sdir="${tp%.jsonl}"
+    siglast="$(tree_write_signature "$tp" "$sdir")"
     while [ "$left" -gt 0 ] && kill -0 "$pid" 2>/dev/null; do
       sleep "$WAIT_TICK"; left=$((left - WAIT_TICK))
-      ts="$(transcript_mtime "$tp")"
-      dts="$(session_dir_signature "$sdir")"
-      cts="$(descendant_cpu_signature "$pid")"
-      if [ "$ts" != "$last" ] || [ "$dts" != "$dlast" ] || [ "$cts" != "$clast" ]; then
-        last="$ts"; dlast="$dts"; clast="$cts"; left=$WATCHDOG_SECS
+      tp="$(find_session_transcript "$sid")"; sdir="${tp%.jsonl}"
+      sig="$(tree_write_signature "$tp" "$sdir")"
+      turn_tree_state "$tp" "$sdir" "$marker"
+      if [ "$TURN_PENDING" = 1 ] || { [ "$TURN_ACTIVE" = 1 ] && [ "$sig" != "$siglast" ]; }; then
+        left=$WATCHDOG_SECS
       fi
+      siglast="$sig"
     done
     # BUG 058k: the decision to act stops here — progress-detection is arm_watchdog's own concern
     # and stays above, but validating the launch, TERM-then-KILL, and the snapshot sweep are now
@@ -2465,7 +2589,7 @@ cleanup_orphan_time_files() {
       instance_alive "${pid:-0}" "${st:-}" || rm -f "$m"
     done
   fi
-  for pre in todos-seconds todos-done claude-exit-reason safe-to-exit claude-session; do   # BUG 058, BUG 057
+  for pre in todos-seconds todos-done claude-exit-reason safe-to-exit claude-session turn-concluded; do   # BUG 058, BUG 057, TASK-066
     for f in "$gc/$pre-$slug-"*; do
       [ -e "$f" ] || continue
       case "$f" in *.lock|*.tmp) continue;; esac           # sidecars swept with their base file below

@@ -4,6 +4,31 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-09-22
+
+### Added
+
+- `--version` prints the installed version and exits.
+
+### Changed
+
+- Watchdog no longer judges a hung `claude` by OR'ing raw transcript mtime, session-dir writes,
+  and descendant CPU together; it classifies the current turn's state (pending/active/concluded)
+  from the last assistant/user record in the transcript, for the main session and every live
+  subagent, and resets its window only while a turn is genuinely still running.
+
+### Fixed
+
+- Watchdog's turn-state check now discovers each session's transcript file by its
+  `--session-id`, instead of predicting Claude Code's project-directory naming from the launch
+  path — a target repository under a dotfile-style directory segment (e.g. `~/.foo/bar`)
+  previously produced a transcript path Claude Code never created, so the watchdog could never
+  see progress and killed a healthy session outright at every `KAIZERO_WATCHDOG` timeout.
+- `claude` sessions launched by `kaizero.sh` no longer inherit `CLAUDECODE`/
+  `CLAUDE_CODE_CHILD_SESSION` from the environment `kaizero.sh` itself was started in, which
+  could make a launched session misbehave when `kaizero.sh` runs nested inside another Claude
+  Code session.
+
 ## [0.1.3] - 2026-09-21
 
 ### Added
