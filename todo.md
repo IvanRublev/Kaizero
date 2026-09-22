@@ -95,7 +95,7 @@
 - [x] TASK-063 Startup box holds the doctor's "Testing ... / ok" check lines under `Kaizero $VERSION`, and wraps the Todo/Target line onto multiple interior lines instead of overflowing the border on long repo paths
 - [x] TASK-064 An agent that calls `merge`/`mr` without first claiming the task in this session gets a distinct refusal telling it to claim first tasks/TASK-064.md
 - [x] TASK-065 Operator sees zero.sh's symlink and landing-outcome lines in kaizero.sh's own terminal output, relayed through a session-scoped log file discarded on exit
-- [x] TASK-066 kaizero's watchdog judges a hung claude by whether its turn has ended, across the whole agent tree, not by file mtime or unconditional CPU churn
+- [ ] TASK-066 kaizero's watchdog judges a hung claude by whether its turn has ended, across the whole agent tree, not by file mtime or unconditional CPU churn
 - [x] TASK-067 `kaizero --version` prints the installed version and exits
 - [?] TASK-070 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-071 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
