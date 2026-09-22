@@ -8,6 +8,9 @@ All notable changes to Kaizero are documented here. Format follows
 
 ### Added
 
+- `zero.sh`'s `KAIZERO_LINK` symlink-report lines, `merge`/`mr` landing-success lines, and MR mode's
+  `push`/forge-request-creation land-gate failures now also relay into `kaizero.sh`'s own terminal
+  output via a per-launch session log, instead of staying visible only inside the Claude transcript.
 - `merge`/`mr` refuse with a distinct exit code and a "claim first" message when the session never
   claimed the task, instead of folding that case into the existing peer-conflict refusal.
 
