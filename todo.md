@@ -89,6 +89,11 @@
 - [x] TASK-059c Kaizero's own console output reads as one styled voice, with a plain fallback for terminals that can't render it
 - [x] BUG-059d `kaizero.sh`'s `--settings` payload should grant the auto-mode classifier trust over claimed worktree directories, to prevent edit-time prompts and denials there
 - [x] TASK-059e Zeroed commits carry a Kaizero co-author trailer (blocked by 059)
-- [?] TASK-060 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
-- [?] TASK-062 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
-- [?] TASK-063 Startup box holds the doctor's "Testing ... / ok" check lines under `Kaizero $VERSION`, and wraps the Todo/Target line onto multiple interior lines instead of overflowing the border on long repo paths
+- [x] BUG-060 A two-repository claim never links the target worktree's own gitignored top-level material, so every tool call inside it fails
+- [x] BUG-061 A `git merge --no-ff -m` commit's `prepare-commit-msg` hook folds the Kaizero co-author trailer into the subject line instead of the body
+- [x] BUG-062 A-001 and T-006 assert literal test values that drifted out of sync with kaizero.sh's current output and source text
+- [x] TASK-063 Startup box holds the doctor's "Testing ... / ok" check lines under `Kaizero $VERSION`, and wraps the Todo/Target line onto multiple interior lines instead of overflowing the border on long repo paths
+- [x] TASK-064 An agent that calls `merge`/`mr` without first claiming the task in this session gets a distinct refusal telling it to claim first tasks/TASK-064.md
+- [x] TASK-065 Operator sees zero.sh's symlink and landing-outcome lines in kaizero.sh's own terminal output, relayed through a session-scoped log file discarded on exit
+- [?] TASK-070 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
+- [?] TASK-071 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again

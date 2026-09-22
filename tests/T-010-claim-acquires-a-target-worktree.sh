@@ -27,12 +27,15 @@ mkrepo(){ mkdir -p "$1"; ( cd "$1"; git init -q -b main; git config user.email t
 T14="$TESTROOT/T17"; mkdir -p "$T14/code" "$T14/plan" "$T14/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$T14/bin/claude"; chmod +x "$T14/bin/claude"
 mkrepo "$T14/code"
+( cd "$T14/code"; printf 'tasks/\n' > .gitignore; git add .gitignore; git commit -qm ignore-tasks )
+mkdir -p "$T14/code/tasks"; printf 'gitignored target spec\n' > "$T14/code/tasks/spec-t17.md"   # BUG-060: two-repository KAIZERO_LINK material
 ( cd "$T14/plan"; git init -q -b main; git config user.email t@t.t; git config user.name test
-  printf -- '- [ ] T1D Wire the retry budget into the poller\n- [ ] R1D r task\n- [ ] A1D a task\n' > todo.md
+  printf -- '- [ ] T1D Wire the retry budget into the poller\n- [ ] R1D r task\n- [ ] A1D a task\n- [ ] K1D take task\n' > todo.md
   mkdir -p tasks
-  for f in T1D R1D A1D; do printf -- '### Acceptance criteria\n- [ ] x\n' > "tasks/$f.md"; done
+  for f in T1D R1D A1D K1D; do printf -- '### Acceptance criteria\n- [ ] x\n' > "tasks/$f.md"; done
   git add -A; git commit -qm todo )
-( cd "$T14/code"; git branch R1D-anything; git branch A1D-x; git branch A1D-y )
+( cd "$T14/code"; git branch R1D-anything; git branch A1D-x; git branch A1D-y
+  git worktree add -q -b K1D-take-task "$T14/tt-K1D-take-task-abc1234" )   # BUG-060: pre-existing target worktree, tt- naming so acquire_target's scan takes it
 ( cd "$T14/code"; PATH="$T14/bin:$PATH" KAIZERO_TEST_EMIT=1 timeout 20 bash "$SCRIPT" --local-merge "$T14/plan/todo.md" >/dev/null 2>&1 || true )
 ZERO14="$T14/plan/.git/zero.sh"
 cat > "$T14/drive.sh" <<DRIVE
@@ -44,8 +47,10 @@ FAILED=0; ERRORED=0
 cd "$T14/plan"
 
 # fork: no candidate branch -> a fresh tt-<id>-<slug> worktree in \$T14/code, forked off target base
-twt=\$("$ZERO14" claim T1D); rc=\$?
+twt=\$(KAIZERO_LINK=tasks "$ZERO14" claim T1D); rc=\$?
 check "T17 fork exit" "\$rc" "0"
+# BUG-060: fork mode links KAIZERO_LINK from TARGET_ROOT
+check "T17 fork is symlink" "\$([ -L "\$twt/tasks" ] && echo yes || echo NO)" "yes"
 check "T17 fork under WT_PARENT/tt-" "\$(case "\$twt" in "$T14"/tt-*) echo yes;; *) echo NO;; esac)" "yes"
 check "T17 fork branch" "\$(git -C "\$twt" symbolic-ref --short HEAD 2>/dev/null)" "T1D-wire-the-retry-budget-into-the-poller"
 own=\$(git worktree list --porcelain | awk -v b="refs/heads/main-task-T1D" '/^worktree /{p=substr(\$0,10)} /^branch /{if(substr(\$0,8)==b){print p;exit}}')
@@ -56,10 +61,21 @@ check "T17 no coord leak" "\$(printf '%s' "\$twt" | grep -c "$T14/code")" "0"
 check "T17 no ts- leak" "\$(printf '%s' "\$twt" | grep -c "\$own")" "0"
 "$ZERO14" release T1D "\$twt" >/dev/null 2>&1   # one-task-per-session: free T1D before claiming R1D
 
+# take: an operator-created target worktree already sits on K1D's own branch before the first
+# claim of K1D ever runs -> acquire_target's fresh scan finds it and takes it, forks nothing
+twtk=\$(KAIZERO_LINK=tasks "$ZERO14" claim K1D); rc=\$?
+check "T17 take exit" "\$rc" "0"
+check "T17 take reuses pre-existing worktree" "\$([ "\$twtk" = "$T14/tt-K1D-take-task-abc1234" ] && echo yes || echo NO)" "yes"
+# BUG-060: take mode links KAIZERO_LINK from TARGET_ROOT
+check "T17 take is symlink" "\$([ -L "\$twtk/tasks" ] && echo yes || echo NO)" "yes"
+"$ZERO14" release K1D "\$twtk" >/dev/null 2>&1
+
 # reattach: a pre-existing branch with no worktree -> reattached, not forked
-twtr=\$("$ZERO14" claim R1D); rc=\$?
+twtr=\$(KAIZERO_LINK=tasks "$ZERO14" claim R1D); rc=\$?
 check "T17 reattach exit" "\$rc" "0"
 check "T17 reattach branch" "\$(git -C "\$twtr" symbolic-ref --short HEAD 2>/dev/null)" "R1D-anything"
+# BUG-060: reattach mode links KAIZERO_LINK from TARGET_ROOT
+check "T17 reattach is symlink" "\$([ -L "\$twtr/tasks" ] && echo yes || echo NO)" "yes"
 "$ZERO14" release R1D "\$twtr" >/dev/null 2>&1   # free R1D before the A1D ambiguity attempt
 
 # ambiguity: two branches share the id prefix -> exit 3, nothing created
@@ -72,9 +88,11 @@ DRIVE
 bash "$T14/drive.sh" || FAILED=1
 # T17 PASS — the fork case lands a fresh tt-… worktree beside the target, on the branch
 # 038b's naming rule names, forked off the target base, with .owner line 5 (in the coordination
-# worktree) naming it and the printed path never equal to $TARGET_ROOT itself; the reattach case
+# worktree) naming it and the printed path never equal to $TARGET_ROOT itself; the take case
+# reuses a pre-existing tt-… target worktree instead of forking a second one; the reattach case
 # attaches the existing branch instead of forking a new one; the ambiguity case (two branches
-# sharing the A1D- prefix) exits 3 and creates neither worktree.
+# sharing the A1D- prefix) exits 3 and creates neither worktree; BUG-060: fork, take and reattach
+# all carry KAIZERO_LINK's symlink into the target worktree, same as track mode (see D1).
 
 # T18 — claim is a no-op change for SAME_REPO=1
 #

@@ -59,7 +59,10 @@ check "T8 rc" "$(echo "$out" | grep RC=)" "RC=1"
 # T9 — nesting, coordination inside target: proceeds ignored
 ( cd "$TT/code8"; echo 'plan/' >> .gitignore; git add .gitignore; git commit -qm ignore-plan )
 out=$(emit "$TT/code8" "$TT/code8/plan/todo.md")
-check "T9 proceeds ignored" "$(echo "$out" | grep -c 'Todo .*plan@main . Target .*code8@main')" "1"
+# two checks, not one combined pattern: TASK-063 wraps Todo/Target onto separate interior lines
+# once the combined text passes 76 columns, which a $TESTROOT-length fixture path always does.
+check "T9 proceeds ignored Todo" "$(echo "$out" | grep -c 'Todo .*plan@main')" "1"
+check "T9 proceeds ignored Target" "$(echo "$out" | grep -c 'Target .*code8@main')" "1"
 # T9 PASS — the same nesting with plan/ gitignored proceeds.
 
 # T10 — nesting, target inside coordination: refuses unignored
@@ -75,7 +78,9 @@ check "T10 rc" "$(echo "$out" | grep RC=)" "RC=1"
 # T11 — nesting, target inside coordination: proceeds ignored, WT_PARENT beside the outer
 ( cd "$TT/plan10"; echo 'code/' >> .gitignore; git add .gitignore; git commit -qm ignore-code )
 out=$(emit "$TT/plan10/code" "$TT/plan10/todo.md")
-check "T11 proceeds ignored" "$(echo "$out" | grep -c 'Todo .*plan10@main . Target .*plan10/code@main')" "1"
+# two checks, not one combined pattern — same TASK-063 wrap as T9 above.
+check "T11 proceeds ignored Todo" "$(echo "$out" | grep -c 'Todo .*plan10@main')" "1"
+check "T11 proceeds ignored Target" "$(echo "$out" | grep -c 'Target .*plan10/code@main')" "1"
 check "T11 WT_PARENT is the outer's dirname (nested)" "$(awk -F= '/^WT_PARENT=/{print $2}' "$TT/plan10/.git/zero.sh")" "$(dirname "$TT/plan10")"
 # T11 PASS — the same nesting with code/ gitignored proceeds, and WT_PARENT lands beside
 # the outer repository when nested rather than beside the target.
@@ -91,7 +96,9 @@ GC12="$(git -C "$TT/plan12" rev-parse --path-format=absolute --git-common-dir)"
 mkdir -p "$GC12/session"
 printf '%s\n%s\n' "$DEADST12" "SOMEID" > "$GC12/session/$DEADPID12"
 out=$(emit "$TT/code12" "$TT/plan12/todo.md")
-check "T12 proceeds despite dead peer's dirt" "$(echo "$out" | grep -c 'Todo .*plan12@main . Target .*code12@main')" "1"
+# two checks, not one combined pattern — same TASK-063 wrap as T9 above.
+check "T12 proceeds despite dead peer's dirt Todo" "$(echo "$out" | grep -c 'Todo .*plan12@main')" "1"
+check "T12 proceeds despite dead peer's dirt Target" "$(echo "$out" | grep -c 'Target .*code12@main')" "1"
 check "T12 discarded the dirty file" "$(git -C "$TT/plan12" status --porcelain | wc -l | tr -d ' ')" "0"
 # T12 PASS — a dead session's own leftover dirt is discarded per path, launch proceeds.
 

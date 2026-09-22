@@ -49,15 +49,16 @@ bake(){
 
 # run a claim as its own disposable driver process, writing a BUG 057 session record naming
 # itself so ensure_owner has a valid owner to resolve — no ancestor process named claude needed.
+# $4 (optional): extra env assignments (e.g. "KAIZERO_LINK=tasks") prefixed onto the claim call.
 run_claim(){
-  local plandir=$1 id=$2 errfile=$3 drv
+  local plandir=$1 id=$2 errfile=$3 extra_env=${4:-} drv
   drv="$TD/drv-$id-$RANDOM.sh"
   cat > "$drv" <<'DRV'
 REC="$0.rec"
 printf '%s\n%s\n%s\n' "$$" "$(ps -o lstart= -p $$ | awk '{$1=$1;print}')" 1 > "$REC"
 export KAIZERO_SESSION_RECORD="$REC" KAIZERO_SESSION_EPOCH=1
 DRV
-  printf 'cd "%s"\nbash .git/zero.sh claim %s\n' "$plandir" "$id" >> "$drv"
+  printf 'cd "%s"\n%s bash .git/zero.sh claim %s\n' "$plandir" "$extra_env" "$id" >> "$drv"
   bash "$drv" 2>"$errfile"
 }
 
@@ -71,16 +72,21 @@ git clone -q "$TD/d1code-origin.git" "$TD/d1prior"
 ( cd "$TD/d1prior"; git config user.email t@t.t; git config user.name test
   git checkout -qb d1a-fix-widget; echo prior >> f; git commit -qam "prior work"; git push -q origin d1a-fix-widget )
 check "D1 pre-check: no local branch in target" "$(git -C "$TD/d1code" branch --list d1a-fix-widget | wc -l | tr -d ' ')" "0"
+mkdir -p "$TD/d1code/tasks"; printf 'gitignored target spec\n' > "$TD/d1code/tasks/spec-d1.md"   # BUG-060: track mode's own KAIZERO_LINK material
 
-twt=$(run_claim "$TD/d1plan" d1a "$TD/d1.err"); rc=$?
+twt=$(run_claim "$TD/d1plan" d1a "$TD/d1.err" "KAIZERO_LINK=tasks"); rc=$?
 check "D1 claim exit" "$rc" "0"
 check "D1 target worktree tip == origin's tip" "$([ "$(git -C "$twt" rev-parse HEAD 2>/dev/null)" = "$(git -c safe.bareRepository=all -C "$TD/d1code-origin.git" rev-parse d1a-fix-widget)" ] && echo yes || echo NO)" "yes"
 check "D1 prior commit present (not a fresh fork)" "$(git -C "$twt" log --format=%s 2>/dev/null | grep -c 'prior work')" "1"
+# BUG-060: track mode links KAIZERO_LINK from TARGET_ROOT same as every other two-repository mode
+check "D1 track mode is symlink" "$([ -L "$twt/tasks" ] && echo yes || echo NO)" "yes"
+check "D1 track mode readable" "$(cat "$twt/tasks/spec-d1.md" 2>/dev/null)" "gitignored target spec"
 # D1 PASS — acquire_task's required branch lookup finds d1a-fix-widget on origin though no local
 # copy exists; make_target_wt's track mode checks the worktree out directly at
 # refs/remotes/origin/d1a-fix-widget, the exact ref that lookup's own fetch resolved — never
 # --track/upstream resolution — so the worktree's tip is origin's tip, carrying the prior work,
-# never a divergent fresh fork off $TB.
+# never a divergent fresh fork off $TB; BUG-060 track mode is symlink proves KAIZERO_LINK reaches
+# this mode's target worktree too.
 
 # D2 — a diverged local branch refuses the claim outright, nothing moved, nothing created
 mkorigin "$TD/d2code"; mkrepo "$TD/d2plan"

@@ -296,7 +296,11 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$T26/bin/claude"; chmod +x "$T26/bin/c
 mkrepo "$T26/code"; mkrepo "$T26/plan"; mktodo "$T26/plan"
 ( cd "$T26/plan"; mkdir -p tasks; printf -- '### Acceptance criteria\n- [ ] x\n' > tasks/G1.md; git add -A; git commit -qm "task file" )
 banner=$( ( cd "$T26/code"; PATH="$T26/bin:$PATH" KAIZERO_TEST_EMIT=1 timeout 20 bash "$SCRIPT" --local-merge "$T26/plan/todo.md" 2>&1 ) )
-check "T26 banner ends fork..merge" "$(echo "$banner" | grep -c "Todo $T26/plan@main \. Target $T26/code@main \. Fork -> implement -> commit -> merge")" "1"
+# three checks, not one combined pattern: TASK-063 wraps Todo/Target/Fork onto separate interior
+# lines once the combined text passes 76 columns, which a $TESTROOT-length fixture path always does.
+check "T26 banner Todo" "$(echo "$banner" | grep -c "Todo $T26/plan@main")" "1"
+check "T26 banner Target" "$(echo "$banner" | grep -c "Target $T26/code@main")" "1"
+check "T26 banner ends fork..merge" "$(echo "$banner" | grep -c 'Fork -> implement -> commit -> merge')" "1"
 check "T26 no one-repo banner" "$(echo "$banner" | grep -c 'Base ')" "0"
 ZERO26="$T26/plan/.git/zero.sh"
 cat > "$T26/drive.sh" <<DRIVE

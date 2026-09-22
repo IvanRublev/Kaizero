@@ -108,12 +108,30 @@ check "O4 link intact" "$([ -L "$wt4/tasks" ] && echo yes || echo NO)" "yes"
 # DANGLING link is -L true but -e false: without the -L test the ln -s dies "File exists" on BSD
 # and GNU alike, and set -e inside acquire_task takes the whole claim down with it.
 sed -n '/^link_ignored() {/,/^}/p' "$ZERO" > "$TO/li.sh"
+printf 'session_log() { :; }\n' >> "$TO/li.sh"   # link_ignored's own logging sink, stubbed for this isolated extraction
 rm -f "$wt4/tasks"; ln -s "$TO/gone" "$wt4/tasks"
 ( set -euo pipefail; . "$TO/li.sh"; KAIZERO_LINK=tasks link_ignored "$wt4" ); rc=$?
 # the -L guard skips the name instead of failing on ln -s
 check "O4 dangling exit" "$rc" "0"
 check "O4 dangling kept" "$([ -L "$wt4/tasks" ] && [ ! -e "$wt4/tasks" ] && echo yes || echo NO)" "yes"
 # O4 PASS — exclude dupes, link intact, dangling exit and dangling kept all report their want value.
+
+# O4b — a name already symlinked in place at claim time (an earlier claim or pre-existing worktree
+# state) still gets a startup line, worded distinctly from the newly-linked line, and an unlisted
+# name gets neither line even though it physically exists.
+mkdir -p "$TO/o4b-wt"; ( cd "$TO/o4b-wt"; git init -q -b main; git config user.email t@t.t; git config user.name test )
+( set -euo pipefail; . "$TO/li.sh"; KAIZERO_LINK=tasks,sources link_ignored "$TO/o4b-wt" "$TO/repo" ) 2>"$TO/o4b-first.err"
+( set -euo pipefail; . "$TO/li.sh"; KAIZERO_LINK=tasks link_ignored "$TO/o4b-wt" "$TO/repo" ) 2>"$TO/o4b-second.err"
+# first call: both listed names newly-linked, no already-linked line
+check "O4b first newly-linked count" "$(grep -c '❄ Linked' "$TO/o4b-first.err")" "2"
+check "O4b first no already-linked" "$(grep -c 'already linked' "$TO/o4b-first.err")" "0"
+# second call: tasks is already symlinked — distinct wording, no duplicate newly-linked line for it
+check "O4b second already-linked" "$(grep -c '❄ tasks already linked from' "$TO/o4b-second.err")" "1"
+check "O4b second no newly-linked" "$(grep -c '❄ Linked tasks from' "$TO/o4b-second.err")" "0"
+# unlisted name (sources, not in the second call's KAIZERO_LINK) prints neither line despite existing
+check "O4b unlisted silent" "$(grep -c 'sources' "$TO/o4b-second.err")" "0"
+# O4b PASS — first-call newly-linked count, first-call no already-linked, second-call already-linked,
+# second-call no newly-linked, and unlisted silent all report their want value.
 
 # O8 — todo-list's appended Task-file path is read-only and COORD_ROOT-absolute: readable with no
 # KAIZERO_LINK and no $wt at all; ticking it is a separate operation, still gated on
@@ -139,15 +157,17 @@ DRC=$?
 
 # O2/O3/O4/O8 — checked inside drive.sh, above
 
-# O5 — characterization: the two-repository MR layout links nothing at all, and the target repository's own exclude file and config are left untouched
+# O5 — the two-repository (fork) layout links from TARGET_ROOT, same root KAIZERO_LINK was
+# validated against at launch — not from COORD_ROOT, which has no such material to offer
 mkorigin "$TO/o5code"; mkrepo "$TO/o5plan"
+( cd "$TO/o5code"; printf 'tasks/\n' > .gitignore; git add .gitignore; git commit -qm ignore-tasks )
+mkdir -p "$TO/o5code/tasks"; printf 'gitignored target spec\n' > "$TO/o5code/tasks/spec-O5-target.md"   # TARGET_ROOT's own gitignored material
 ( cd "$TO/o5plan"; printf 'tasks/\n' > .gitignore
   printf -- '- [ ] O5 task\n' > todo.md; git add -A; git commit -qm init
   mkdir tasks; printf -- '- [ ] c\n' > tasks/spec-O5.md
   printf -- '### Acceptance criteria\n- [ ] x\n' > tasks/O5.md )   # resolvable by id, claim needs one
 boot "$TO/o5code" "$TO/o5plan/todo.md"
 EXCLUDE5="$(cd "$TO/o5code" && git rev-parse --git-path info/exclude | sed "s#^#$TO/o5code/#")"
-cp "$EXCLUDE5" "$TO/o5-exclude-pre"
 
 cat > "$TO/o5drive.sh" <<'DRIVE'
 set -uo pipefail
@@ -157,20 +177,20 @@ export KAIZERO_SESSION_RECORD="$REC" KAIZERO_SESSION_EPOCH=1
 FAILED=0; ERRORED=0
 wt=$(KAIZERO_LINK=tasks bash .git/zero.sh claim O5); rc=$?
 check "O5 claim exit" "$rc" "0"
-check "O5 no link -e" "$([ -e "$wt/tasks" ] && echo NO || echo yes)" "yes"
-check "O5 no link -L" "$([ -L "$wt/tasks" ] && echo NO || echo yes)" "yes"
+check "O5 is symlink" "$([ -L "$wt/tasks" ] && echo yes || echo NO)" "yes"
+check "O5 readable" "$(cat "$wt/tasks/spec-O5-target.md" 2>/dev/null)" "gitignored target spec"
 [ "$FAILED" = 0 ] && [ "$ERRORED" = 0 ]
 DRIVE
 # shellcheck disable=SC2097,SC2098
 TO="$TO" bash "$TO/o5drive.sh"
 DRC5=$?
 [ "$DRC5" = 0 ] || FAILED=1
-check "O5 exclude untouched" "$(cmp -s "$EXCLUDE5" "$TO/o5-exclude-pre" && echo yes || echo NO)" "yes"
+check "O5 exclude entry" "$(grep -c '^/tasks$' "$EXCLUDE5")" "1"
 check "O5 no worktreeConfig ext" "$(git -C "$TO/o5code" config --get extensions.worktreeConfig >/dev/null 2>&1 && echo NO || echo yes)" "yes"
 check "O5 no core.excludesFile" "$(git -C "$TO/o5code" config --local --get core.excludesFile >/dev/null 2>&1 && echo NO || echo yes)" "yes"
-# O5 PASS — the claim completes with KAIZERO_LINK=tasks set, the task worktree carries no
-# tasks entry at all (neither -e nor -L), $TO/o5code's own info/exclude is byte-identical to its
-# pre-claim copy, and no ignore-scoping git config was written there.
+# O5 PASS — the claim completes with KAIZERO_LINK=tasks set, the target worktree carries a
+# `tasks` symlink into TARGET_ROOT (o5code), readable, with a matching entry in o5code's own
+# info/exclude, and no ignore-scoping git config was written there.
 
 # O6 — a bad KAIZERO_LINK refuses the run at startup, before any claude
 cd "$TO/repo"

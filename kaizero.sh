@@ -7,7 +7,7 @@
 # Run -h for usage.
 set -euo pipefail
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
 
 # lowest released version of each forge CLI known to carry every flag/field assert_forge_flags
@@ -306,7 +306,7 @@ flag_defined() {
 assert_forge_flag() {
   local help="$1" cmd="$2" flag="$3" minver="$4"
   flag_defined "$help" "$flag" \
-    || { echo "$PROG: $cmd --help does not list '$flag' — $FORGE's flag surface changed; that flag is present in $FORGE >= $minver, so upgrade if your $FORGE is older, or it was renamed in a newer $FORGE and kaizero needs updating"; exit 1; }
+    || { doc_print "$cmd --help does not list '$flag' — $FORGE's flag surface changed; that flag is present in $FORGE >= $minver, so upgrade if your $FORGE is older, or it was renamed in a newer $FORGE and kaizero needs updating"; exit 1; }
 }
 
 # check 5: forge flag/field surface — every flag mr_list/mr_create pass to $FORGE, the live auth
@@ -341,7 +341,7 @@ assert_forge_flags() {
       ghfields="$(gh pr list --json 2>&1 >/dev/null)" || true
       for f in number headRefOid baseRefName state url; do
         grep -qF -- "$f" <<<"$ghfields" \
-          || { echo "$PROG: Gh pr list --json does not offer the '$f' field — gh's JSON field surface changed; that field is present in gh >= $MIN_GH_VERSION, so upgrade if your gh is older, or it was renamed in a newer gh and kaizero needs updating"; exit 1; }
+          || { doc_print "Gh pr list --json does not offer the '$f' field — gh's JSON field surface changed; that field is present in gh >= $MIN_GH_VERSION, so upgrade if your gh is older, or it was renamed in a newer gh and kaizero needs updating"; exit 1; }
       done
       ;;
     glab)
@@ -397,6 +397,20 @@ main_root_of() {
   printf '%s' "$guess"
 }
 
+# doc_print MSG: run_doctor's mr-branch message line. Bare "$PROG: MSG" echo by default — the
+# --doctor CLI and the no-arg claude/flock guard both call run_doctor with no box open, so that
+# stays their unboxed behavior unchanged. Set DOCTOR_BOXED=1 only around the mr-mode call the
+# startup box makes (below), which renders the identical text as a box_line row instead, so every
+# message this call can print stays bounded by the box's own BOX_V borders.
+doc_print() {
+  local msg="$PROG: $1"
+  if [ "${DOCTOR_BOXED:-0}" = 1 ]; then
+    box_line "$C_DIM" "$msg" "$msg"
+  else
+    echo "$msg"
+  fi
+}
+
 # run_doctor [mr]: verify prerequisites. The single source of truth for prerequisite checks — run
 # on normal startup AND via `--doctor` (which the brew formula calls as a post-install step).
 # Exits nonzero with an actionable message on failure. No argument: claude CLI + flock, as always.
@@ -423,13 +437,13 @@ run_doctor() {
   fi
 
   # check 1: git on PATH.
-  command -v git >/dev/null 2>&1 || { echo "$PROG: Git not found on PATH"; exit 1; }
+  command -v git >/dev/null 2>&1 || { doc_print "Git not found on PATH"; exit 1; }
 
   # check 2: the forge CLI and jq, separately, so the operator learns which one to install.
   command -v "$FORGE" >/dev/null 2>&1 \
-    || { echo "$PROG: $FORGE CLI not found on PATH — install it: https://cli.github.com/ (gh) or https://gitlab.com/gitlab-org/cli (glab)"; exit 1; }
+    || { doc_print "$FORGE CLI not found on PATH — install it: https://cli.github.com/ (gh) or https://gitlab.com/gitlab-org/cli (glab)"; exit 1; }
   command -v jq >/dev/null 2>&1 \
-    || { echo "$PROG: Jq not found on PATH — install it: https://jqlang.org/download/"; exit 1; }
+    || { doc_print "Jq not found on PATH — install it: https://jqlang.org/download/"; exit 1; }
 
   # check 3: forge flag/field surface — see assert_forge_flags above. Static, so it runs before
   # every live probe below: a fixture with both a dead token and a renamed flag reports the flag
@@ -442,12 +456,12 @@ run_doctor() {
   # An origin with no host at all — a local path, a file:// URL — has nothing to scope the probe
   # to; an empty --hostname is not a scoped probe, so this is skipped rather than called unscoped.
   if [ -n "$ORIGIN_HOST" ]; then
-    echo "$PROG: Testing $FORGE authentication for $ORIGIN_HOST..."
+    doc_print "Testing $FORGE authentication for $ORIGIN_HOST..."
     "$FORGE" auth status --hostname "$ORIGIN_HOST" >/dev/null 2>&1 \
-      || { echo "$PROG: $FORGE authentication for $ORIGIN_HOST: failed"; echo "$PROG: $FORGE auth status failed for $ORIGIN_HOST — run $FORGE auth login --hostname $ORIGIN_HOST (landing a Task as a merge/pull request needs access to that host)$(rewrite_note "$TARGET_ROOT" "$ORIGIN_URL")"; exit 1; }
-    echo "$PROG: $FORGE authentication for $ORIGIN_HOST: ok"
+      || { doc_print "$FORGE authentication for $ORIGIN_HOST: failed"; doc_print "$FORGE auth status failed for $ORIGIN_HOST — run $FORGE auth login --hostname $ORIGIN_HOST (landing a Task as a merge/pull request needs access to that host)$(rewrite_note "$TARGET_ROOT" "$ORIGIN_URL")"; exit 1; }
+    doc_print "$FORGE authentication for $ORIGIN_HOST: ok"
   else
-    echo "$PROG: Origin '$ORIGIN_URL' has no host to scope an auth check to — skipping check 3"
+    doc_print "Origin '$ORIGIN_URL' has no host to scope an auth check to — skipping check 3"
   fi
 
   # check 5: proving network + git auth + that the base a request would target exists on the
@@ -455,16 +469,16 @@ run_doctor() {
   # two outcomes apart without reading git's prose, same rule acquire_task's own base refresh
   # applies. Refspec spelled out so refs/remotes/origin/<base> is always updated (forks from it)
   # rather than opportunistically, depending on the clone's own fetch config.
-  echo "$PROG: Testing '$TARGET_BASE' presence on origin..."
+  doc_print "Testing '$TARGET_BASE' presence on origin..."
   rc=0; network_reachable || rc=$?
   case "$rc" in
-    2) echo "$PROG: '$TARGET_BASE' presence on origin: failed"; echo "$PROG: '$TARGET_BASE' is not on origin in $TARGET_ROOT — push the base branch first: git push -u origin $TARGET_BASE (a merge request needs a base branch that exists on the forge)"; exit 1 ;;
+    2) doc_print "'$TARGET_BASE' presence on origin: failed"; doc_print "'$TARGET_BASE' is not on origin in $TARGET_ROOT — push the base branch first: git push -u origin $TARGET_BASE (a merge request needs a base branch that exists on the forge)"; exit 1 ;;
   esac
   local fetch_out
   if ! fetch_out=$(git -C "$TARGET_ROOT" fetch origin "+refs/heads/$TARGET_BASE:refs/remotes/origin/$TARGET_BASE" 2>&1); then
-    echo "$PROG: '$TARGET_BASE' presence on origin: failed"; echo "$PROG: Fetch of origin/$TARGET_BASE failed in $TARGET_ROOT — $fetch_out"; exit 1
+    doc_print "'$TARGET_BASE' presence on origin: failed"; doc_print "Fetch of origin/$TARGET_BASE failed in $TARGET_ROOT — $fetch_out"; exit 1
   fi
-  echo "$PROG: '$TARGET_BASE' presence on origin: ok"
+  doc_print "'$TARGET_BASE' presence on origin: ok"
 
   # check 6: warning only. Tasks fork from origin/<base> regardless, so this never gates —
   # it only tells the operator when their own checkout disagrees with what a request will build on.
@@ -474,9 +488,9 @@ run_doctor() {
   if [ "$local_tip" != "$remote_tip" ]; then
     mb="$(git -C "$TARGET_ROOT" merge-base "$local_tip" "$remote_tip" 2>/dev/null)" || mb=""
     if [ "$mb" = "$local_tip" ]; then
-      echo "$PROG: $TARGET_BASE in $TARGET_ROOT is behind origin/$TARGET_BASE — Tasks fork from origin/$TARGET_BASE, so requests build on the current base even though this checkout does not; git pull when convenient"
+      doc_print "$TARGET_BASE in $TARGET_ROOT is behind origin/$TARGET_BASE — Tasks fork from origin/$TARGET_BASE, so requests build on the current base even though this checkout does not; git pull when convenient"
     else
-      echo "$PROG: Warning: $TARGET_BASE in $TARGET_ROOT has $(git -C "$TARGET_ROOT" rev-list --count "$remote_tip..$local_tip") commit(s) origin does not — Tasks fork from origin/$TARGET_BASE, so that work is in no session and no merge request; push it first if it belongs there"
+      doc_print "Warning: $TARGET_BASE in $TARGET_ROOT has $(git -C "$TARGET_ROOT" rev-list --count "$remote_tip..$local_tip") commit(s) origin does not — Tasks fork from origin/$TARGET_BASE, so that work is in no session and no merge request; push it first if it belongs there"
     fi
   fi
 }
@@ -732,6 +746,7 @@ if [ ! -t 1 ] && [ -t 0 ]; then exec 4>&0; else exec 4>&1; fi
 # launch inherited, pipe or terminal alike.
 exec 3<&0
 LOOP_COUNT=0
+SESSION_LOG_POS=0   # bytes of SESSION_LOG_FILE already relayed to our own terminal — see relay_session_log
 # claude's pid, set per launch below. Initialized here because Claude Code exports CLAUDE_PID (its
 # own pid) into every Bash-tool env: without this, a TERM arriving BEFORE the first launch — the
 # pre-launch wait, or a Ctrl+C at startup — makes on_term SIGTERM the session that ran us.
@@ -933,6 +948,7 @@ while true; do
             KAIZERO_SAFE_TO_EXIT="$SAFE_TO_EXIT_FILE" \
             KAIZERO_SESSION_TRANSCRIPT="$SESSION_TRANSCRIPT" \
             KAIZERO_SESSION_RECORD="$SESSION_RECORD_FILE" KAIZERO_SESSION_EPOCH="$SESSION_EPOCH" \
+            KAIZERO_SESSION_LOG="$SESSION_LOG_FILE" \
             KAIZERO_NO_CO_AUTHORSHIP="${KAIZERO_NO_CO_AUTHORSHIP:-}" \
             bash -c 'trap "" TERM; exec "$@"' term-ignoring-wrapper \
             script -q /dev/null claude "${CLAUDE_ARGS[@]}" "$PROMPT" >&4 2>&4 <&3 &
@@ -943,6 +959,7 @@ while true; do
             KAIZERO_SAFE_TO_EXIT="$SAFE_TO_EXIT_FILE" \
             KAIZERO_SESSION_TRANSCRIPT="$SESSION_TRANSCRIPT" \
             KAIZERO_SESSION_RECORD="$SESSION_RECORD_FILE" KAIZERO_SESSION_EPOCH="$SESSION_EPOCH" \
+            KAIZERO_SESSION_LOG="$SESSION_LOG_FILE" \
             KAIZERO_NO_CO_AUTHORSHIP="${KAIZERO_NO_CO_AUTHORSHIP:-}" \
             bash -c 'trap "" TERM; exec "$@"' term-ignoring-wrapper \
             script -qc "$CLAUDE_CMD" /dev/null >&4 2>&4 <&3 &
@@ -966,6 +983,7 @@ while true; do
     done
     disarm_watchdog   # claude is gone: retire its timer before the pid can be recycled
     session_record_clear   # BUG 057: this launch's identity is gone — nothing may act on it again
+    relay_session_log
     # why it ended: one read, one lookup. 143/137 alone cannot say — POSIX collapses every SIGTERM
     # into 143 — so an EMPTY file on those two IS the answer: none of our own kill paths fired, the
     # signal came from outside. Every other status is claude's own and already unique.
@@ -1343,9 +1361,19 @@ fi
 # emits with no forge CLI and no network), leaving ORIGIN_URL empty while FORGE still names the
 # forge the origin resolved to, so the bake line and the banner below never go empty or wrong.
 FORGE="${FORGE:-}"; ORIGIN_URL=""
+# the version title and the mode-summary line render as ONE boxed panel (TASK-059c AC), opened
+# here rather than after run_doctor mr — so that call's own "Testing ... / ok" (and any failure/
+# warning) lines print as box_line rows inside it (TASK-063), instead of scrolling past above it
+# as bare unboxed output. DOCTOR_BOXED tells doc_print (run_doctor's own message helper) a box is
+# open around this specific call; unset again right after so every OTHER run_doctor call in this
+# script (the --doctor CLI, the no-arg claude/flock guard) keeps printing bare, unboxed lines.
+box_top "$C_DIM"
+box_line "$C_DIM" "$(c "$C_CYAN" "Kaizero $VERSION")" "Kaizero $VERSION"
 if [ "$MR_MODE" = 1 ] && [ -z "${KAIZERO_TEST_EMIT:-}" ]; then
     ORIGIN_URL="$ORIGIN_REPO_ARG"
+    DOCTOR_BOXED=1
     run_doctor mr
+    unset DOCTOR_BOXED
 fi
 
 if [ "$MR_MODE" = 1 ]; then
@@ -1355,20 +1383,41 @@ else
 fi
 MODE_STEPS_PLAIN="Fork $ARROW implement $ARROW commit $ARROW"
 MODE_STEPS="$(c "$C_DIM" "$MODE_STEPS_PLAIN")"
-# the version title and the mode-summary line render as ONE boxed panel (TASK-059c AC) — opened
-# and closed here, rather than the title getting its own box earlier, since LAST_STEP/MODE_STEPS
-# are only known this late (after the origin/forge decision and doctor checks above, which print
-# their own unboxed lines — folding the box around those too would break its border).
-box_top "$C_DIM"
-box_line "$C_DIM" "$(c "$C_CYAN" "Kaizero $VERSION")" "Kaizero $VERSION"
+# box_wrapped_line BORDER SEP_PLAIN SEP_COLORED SEG_PLAIN_1 SEG_COLORED_1 [SEG_PLAIN_2 SEG_COLORED_2 ...]
+# renders 2+ paired plain/colored segments as one box_line row, joined by SEP, unless the next
+# segment would push the row's plain text past the box's 76-column interior (box_line's own pad
+# going negative) — then it flushes the accumulated row and starts a new one at that segment,
+# breaking only at a segment boundary, never mid-word. A row that always fits (the common case,
+# short paths) still renders as the single box_line call it always did.
+box_wrapped_line() {
+    local border="$1" sep_plain="$2" sep_colored="$3"; shift 3
+    local cur_plain="" cur_colored="" seg_plain seg_colored test_plain
+    while [ "$#" -gt 0 ]; do
+        seg_plain="$1"; seg_colored="$2"; shift 2
+        if [ -z "$cur_plain" ]; then
+            cur_plain="$seg_plain"; cur_colored="$seg_colored"
+        else
+            test_plain="${cur_plain}${sep_plain}${seg_plain}"
+            if [ "${#test_plain}" -gt 76 ]; then
+                box_line "$border" "$cur_colored" "$cur_plain"
+                cur_plain="$seg_plain"; cur_colored="$seg_colored"
+            else
+                cur_plain="$test_plain"; cur_colored="${cur_colored}${sep_colored}${seg_colored}"
+            fi
+        fi
+    done
+    box_line "$border" "$cur_colored" "$cur_plain"
+}
 if [ "$SAME_REPO" = 1 ]; then
-    MODE_LINE_PLAIN="Base $COORD_BASE $DOT $MODE_STEPS_PLAIN $LAST_STEP"
-    MODE_LINE="$(c "$C_DIM" Base) $COORD_BASE $(c "$C_DIM" "$DOT") $MODE_STEPS $(c "$C_CYAN" "$LAST_STEP")"
+    box_wrapped_line "$C_DIM" " $DOT " " $(c "$C_DIM" "$DOT") " \
+        "Base $COORD_BASE" "$(c "$C_DIM" Base) $COORD_BASE" \
+        "$MODE_STEPS_PLAIN $LAST_STEP" "$MODE_STEPS $(c "$C_CYAN" "$LAST_STEP")"
 else
-    MODE_LINE_PLAIN="Todo $COORD_ROOT@$COORD_BASE $DOT Target $TARGET_ROOT@$TARGET_BASE $DOT $MODE_STEPS_PLAIN $LAST_STEP"
-    MODE_LINE="$(c "$C_DIM" Todo) $COORD_ROOT@$COORD_BASE $(c "$C_DIM" "$DOT") $(c "$C_DIM" Target) $TARGET_ROOT@$TARGET_BASE $(c "$C_DIM" "$DOT") $MODE_STEPS $(c "$C_CYAN" "$LAST_STEP")"
+    box_wrapped_line "$C_DIM" " $DOT " " $(c "$C_DIM" "$DOT") " \
+        "Todo $COORD_ROOT@$COORD_BASE" "$(c "$C_DIM" Todo) $COORD_ROOT@$COORD_BASE" \
+        "Target $TARGET_ROOT@$TARGET_BASE" "$(c "$C_DIM" Target) $TARGET_ROOT@$TARGET_BASE" \
+        "$MODE_STEPS_PLAIN $LAST_STEP" "$MODE_STEPS $(c "$C_CYAN" "$LAST_STEP")"
 fi
-box_line "$C_DIM" "$MODE_LINE" "$MODE_LINE_PLAIN"
 box_bottom "$C_DIM"
 printf '\n'
 # countdown before launch: repaint in place on a terminal (colored via c() when COLOR_CAPABLE,
@@ -1431,6 +1480,11 @@ EXIT_REASON_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/claude-exit-r
 # again. One file per instance, overwritten on each launch (never one file per launch), same
 # <kind>-<base>-<instance> naming and GC rule as the files above.
 SESSION_RECORD_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/claude-session-${COORD_BASE//\//-}-$INSTANCE_ID"
+# TASK-065: zero.sh's own append-only copy of its KAIZERO_LINK / landing-outcome / mr push+forge
+# land-gate-failure lines — read back and relayed to kaizero.sh's own terminal at run_loop's
+# per-iteration boundary. Same <kind>-<base>-<instance> naming and GC rule as the files above.
+SESSION_LOG_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/session-log-${COORD_BASE//\//-}-$INSTANCE_ID"
+: > "$SESSION_LOG_FILE"
 ZERO_SH="$GITDIR_ABS/zero.sh"   # where build_zero_prompt wrote the helper
 INSTANCE_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)/instance"
 
@@ -1440,7 +1494,7 @@ INSTANCE_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)/instance"
 mkdir -p "$INSTANCE_DIR"; printf '%s\n%s\n' "$$" "$(proc_start "$$")" > "$INSTANCE_DIR/$INSTANCE_ID"
 # BUG 057: the session record is per-instance state exactly like the instance marker above — every
 # exit path (Ctrl+C, TERM, MAX_LOOPS, IDFAIL) must leave none of this instance's identity behind.
-trap 'rm -f "$INSTANCE_DIR/$INSTANCE_ID" "$TARGET_INST_MARKER" "$SESSION_RECORD_FILE" 2>/dev/null' EXIT
+trap 'rm -f "$INSTANCE_DIR/$INSTANCE_ID" "$TARGET_INST_MARKER" "$SESSION_RECORD_FILE" "$SESSION_LOG_FILE" 2>/dev/null' EXIT
 cleanup_orphan_time_files
 # refuse before any of this instance's own markers exist, so a refusal leaves neither
 # registry anything to reap.
@@ -2374,6 +2428,19 @@ session_record_write() {   # $1=pid $2=epoch
   printf '%s\n%s\n%s\n' "$pid" "$st" "$epoch" > "$SESSION_RECORD_FILE"
 }
 session_record_clear() { rm -f "$SESSION_RECORD_FILE" 2>/dev/null || true; }
+# TASK-065: print every line zero.sh appended to SESSION_LOG_FILE since the last call, in the
+# same icon-prefixed style as kaizero.sh's own reports. Called once per run_loop iteration, right
+# after claude exits — never a separate tailing process racing the claude launch. SESSION_LOG_POS
+# (bytes already relayed) is a run_loop global so a restart within the same instance never re-prints.
+relay_session_log() {
+  [ -f "$SESSION_LOG_FILE" ] || return 0
+  local sz; sz=$(wc -c < "$SESSION_LOG_FILE" 2>/dev/null || echo 0)
+  [ "$sz" -gt "${SESSION_LOG_POS:-0}" ] || return 0
+  tail -c "+$((SESSION_LOG_POS + 1))" "$SESSION_LOG_FILE" | while IFS= read -r line; do
+    printf '%s%s\n' "$(icon)" "$line"
+  done
+  SESSION_LOG_POS=$sz
+}
 # BUG 058k: session_record_check/descendant_snapshot/kill_snapshot used to be defined here too —
 # terminator.sh (write_terminator_sh, above) is now the only place that validates a record and
 # acts on it; this file only ever writes or clears its own instance's record.
@@ -2530,7 +2597,7 @@ write_prepare_commit_msg_hook() {
 [ -n "${KAIZERO_NO_CO_AUTHORSHIP:-}" ] && exit 0
 msg_file="$1"
 grep -qF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg_file" 2>/dev/null && exit 0
-printf '\nCo-authored-by: Kaizero <noreply@kaizero.sh>\n' >> "$msg_file"
+printf '\n\nCo-authored-by: Kaizero <noreply@kaizero.sh>\n' >> "$msg_file"
 HOOK_EOF
     chmod +x "$hook"
 }
@@ -2776,6 +2843,12 @@ remove_worktree() {
 # this invocation's instance = the kaizero.sh that launched the claude above it, via env.
 # 'shared' fallback if unset (should not happen under kaizero.sh).
 INSTANCE_ID="${KAIZERO_INSTANCE:-shared}"
+# TASK-065: append-only copy of the KAIZERO_LINK / merge-mr landing-outcome / mr push+forge
+# land-gate-failure lines, read back by kaizero.sh's own run_loop so the operator sees them in
+# kaizero.sh's own terminal — an ADDED copy, never a redirect: the original echo/printf above
+# each call site is untouched. KAIZERO_SESSION_LOG unset (not launched under kaizero.sh, or an
+# older kaizero.sh) → no-op.
+session_log() { [ -n "${KAIZERO_SESSION_LOG:-}" ] && printf '%s\n' "$1" >> "$KAIZERO_SESSION_LOG" 2>/dev/null; return 0; }
 # per-instance aggregate path: seconds of Task ownership credited to instance $1. Namespaced by base
 # slug (like branches/worktrees/reclaim-locks) AND instance id, so peers keep separate, comparable totals.
 todos_file() { printf '%s/todos-seconds-%s-%s' "$COORD_GITDIR" "${COORD_BASE//\//-}" "$1"; }
@@ -3271,6 +3344,11 @@ link_ignored() {
     if [ ! -e "$wt/$p" ] && [ ! -L "$wt/$p" ]; then
       ln -s "$root/$p" "$wt/$p"
       grep -qxF "/$p" "$ex" 2>/dev/null || echo "/$p" >> "$ex"
+      printf '❄ Linked %s from %s\n' "$p" "$root" >&2
+      session_log "Linked $p from $root"
+    else
+      printf '❄ %s already linked from %s\n' "$p" "$root" >&2
+      session_log "$p already linked from $root"
     fi
   done
 }
@@ -3418,10 +3496,6 @@ make_target_wt() {
       # reset or otherwise moved here.
       twt="$WT_PARENT/tt-$branch-$(uuidgen | tr -d - | head -c7)"
       "$FLOCK_BIN" "$WT_LOCK" git -C "$TARGET_ROOT" worktree prune >/dev/null 2>&1 || true
-      # No link_ignored here — this function runs only in the two-repository layout
-      # (TARGET_MODE != same), where KAIZERO_LINK's material lives in COORD_ROOT, not
-      # $TARGET_ROOT: nothing to link, so nothing is linked and $TARGET_ROOT's own exclude/config
-      # stay untouched.
       if out=$("$FLOCK_BIN" "$WT_LOCK" git -C "$TARGET_ROOT" worktree add "$twt" "$branch" 2>&1); then
         printf '%s' "$twt"; return 0
       fi
@@ -3655,6 +3729,10 @@ acquire_task() {
       release_task "$n"   # $twt (make_target_wt's git failure text) survives — release_task has its own local
       printf '%s' "$twt"; return 1
     fi
+    # two-repository case (take/reattach/fork/track alike): KAIZERO_LINK is validated at launch
+    # against $TARGET_ROOT and the single-repository call above already links from that same
+    # root — link the target worktree from it too, idempotent by construction.
+    link_ignored "$twt" "$TARGET_ROOT"
   fi
 
   # The branch's own merge-base with its base right now — recomputed on every acquire (take,
@@ -4196,8 +4274,10 @@ merge_same_repo() {
   exec 10>&-
   if [ "$wt_rc" -eq 0 ] && [ "$br_rc" -eq 0 ]; then
     echo "merge $raw: merged to $COORD_BASE; worktree + branch cleaned"
+    session_log "merge $raw: merged to $COORD_BASE; worktree + branch cleaned"
   else
     echo "merge $raw: merged to $COORD_BASE; cleanup incomplete (worktree rc=$wt_rc branch rc=$br_rc) — remove $wt and branch $branch by hand"
+    session_log "merge $raw: merged to $COORD_BASE; cleanup incomplete (worktree rc=$wt_rc branch rc=$br_rc) — remove $wt and branch $branch by hand"
   fi
   return 0
 }
@@ -4405,8 +4485,10 @@ merge_two_repos() {
 
   if [ "$wt_rc" -eq 0 ] && [ "$br_rc" -eq 0 ]; then
     echo "merge $raw: merged to $TARGET_BASE in $TARGET_ROOT; box landed on $COORD_BASE; worktrees + branches cleaned"
+    session_log "merge $raw: merged to $TARGET_BASE in $TARGET_ROOT; box landed on $COORD_BASE; worktrees + branches cleaned"
   else
     echo "merge $raw: merged to $TARGET_BASE in $TARGET_ROOT; box landed on $COORD_BASE; cleanup incomplete (worktree rc=$wt_rc branch rc=$br_rc) — remove $wt and branch $branch by hand"
+    session_log "merge $raw: merged to $TARGET_BASE in $TARGET_ROOT; box landed on $COORD_BASE; cleanup incomplete (worktree rc=$wt_rc branch rc=$br_rc) — remove $wt and branch $branch by hand"
   fi
   return 0
 }
@@ -4572,7 +4654,9 @@ task_gate_file() {
 # (human needed), base left clean, branch + worktree kept; exit 5 = the land gate refused (no work,
 # borrowed work, uncommitted work, wrong branch, or
 # a human's own state) — nothing merged, nothing torn down; exit 6 = not the owning session —
-# refused before anything is merged, ticked or torn down. zero.sh is the only writer of the box,
+# refused before anything is merged, ticked or torn down; exit 9 = this session never claimed
+# raw_id in this session — refused before the exit-6 peer-lease check even runs. zero.sh is the
+# only writer of the box,
 # so there is no "your branch checked the wrong box" case to gate or self-heal here.
 # <symbol> (default x) is exactly one glyph, which may be several bytes, not a space and not `]`;
 # what it MEANS is the session's business, not zero.sh's — `?` = "landed, needs human review" is
@@ -4588,6 +4672,14 @@ merge_task() {
   # acquire epoch + instance (lines 3,4 of .owner), read before either landing removes the wt.
   # fork (line 6) is the target branch's recorded fork point, used by merge_two_repos' test 2.
   acq=""; inst=""; fork=""; o_pid=""; o_start=""; if [ -n "$wt" ] && [ -f "$wt/.owner" ]; then { read -r o_pid; read -r o_start; read -r acq; read -r inst; read -r _ || true; read -r fork || fork=""; } < "$wt/.owner" 2>/dev/null || acq=""; fi
+  # claim first: this session's own current-task marker (set_current, written by claim/release)
+  # must name n before the .owner comparison below ever runs — a mismatch here means this session
+  # never claimed n in this session at all, a self-inflicted procedural miss, not a peer holding a
+  # live lease (TASK-064). Exclusive to this case — never reused for the .owner mismatch below.
+  if [ "$(session_current "$OWNER_PID")" != "$n" ]; then
+    echo "merge $raw: not claimed by this session — run 'zero.sh claim $raw' first" >&2
+    return 9
+  fi
   # not your task: someone else's session holds this id (claim_owner is rewritten on every
   # acquire, so lines 1/2 always name whoever currently holds it) — refused before anything is
   # merged, ticked or torn down, under its own exit code so a caller can tell this from a gate
@@ -4663,7 +4755,8 @@ mr_body_add_closing_line() {
 # exit 0 = pushed & request opened/reused & box ticked `[↑]`, coordination worktree + branch
 # cleaned, target worktree torn down (branch kept); exit 2 = should not happen (see the mr prompt);
 # exit 5 = the land gate or a forge call refused — nothing handed off; exit 6 = not the owning
-# session — refused before anything is pushed, ticked or torn down.
+# session — refused before anything is pushed, ticked or torn down; exit 9 = this session never
+# claimed raw_id in this session — refused before the exit-6 peer-lease check even runs.
 mr_task() {
   local raw=$1 twt=$2 n branch wt acq inst o_pid o_start
   local mb s survivors ok cand owner untracked out existing title bodyfile
@@ -4675,6 +4768,11 @@ mr_task() {
   wt=$(wt_for_branch "$branch")
   # acquire epoch + instance (lines 3,4 of .owner), read before landing removes the wt.
   acq=""; inst=""; o_pid=""; o_start=""; if [ -n "$wt" ] && [ -f "$wt/.owner" ]; then { read -r o_pid; read -r o_start; read -r acq; read -r inst; } < "$wt/.owner" 2>/dev/null || acq=""; fi
+  # claim first — same rule and same code as merge_task's own check, above its convergence point.
+  if [ "$(session_current "$OWNER_PID")" != "$n" ]; then
+    echo "mr $raw: not claimed by this session — run 'zero.sh claim $raw' first, then retry mr" >&2
+    return 9
+  fi
   # not your task — same rule and same code as merge_task's convergence point.
   if [ -n "$o_pid" ] && { [ "$o_pid" != "$OWNER_PID" ] || [ "$o_start" != "$OWN_START" ]; }; then
     echo "mr $raw: not your task — instance ${inst:-another session} holds it" >&2
@@ -4773,6 +4871,7 @@ mr_task() {
     # terminal credential prompt.
     if ! out=$(GIT_TERMINAL_PROMPT=0 git -C "$twt" push -u origin HEAD 2>&1); then
       echo "mr $raw: land gate failed at push: $out" >&2
+      session_log "mr $raw: land gate failed at push: $out"
       return 5
     fi
 
@@ -4781,6 +4880,7 @@ mr_task() {
     # the highest number — never a row's position in the list.
     if ! existing=$(mr_list "$s" 2>&1); then
       echo "mr $raw: land gate failed at mr: $existing" >&2
+      session_log "mr $raw: land gate failed at mr: $existing"
       return 5
     fi
     w_sha=""; w_base=""; w_state=""; w_url=""
@@ -4808,6 +4908,7 @@ mr_task() {
       title="$(todo_title_for_id "$raw")"; title="$raw${title:+ $title}"
       if ! url=$(mr_create "$s" "$title" "$bodyfile" 2>&1); then
         echo "mr $raw: land gate failed at mr: $url" >&2
+        session_log "mr $raw: land gate failed at mr: $url"
         return 5
       fi
     fi
@@ -4876,13 +4977,17 @@ mr_task() {
     x)
       if [ "$already" = 1 ]; then
         echo "mr $raw: already in $TARGET_BASE; box landed as [x] on $COORD_BASE; worktrees cleaned"
+        session_log "mr $raw: already in $TARGET_BASE; box landed as [x] on $COORD_BASE; worktrees cleaned"
       else
         echo "mr $raw: $url already merged; box landed as [x] on $COORD_BASE; worktrees cleaned"
+        session_log "mr $raw: $url already merged; box landed as [x] on $COORD_BASE; worktrees cleaned"
       fi ;;
     '?')
-      echo "mr $raw: $url merged into $w_base, not $TARGET_BASE; box landed as [?] on $COORD_BASE; worktrees cleaned" ;;
+      echo "mr $raw: $url merged into $w_base, not $TARGET_BASE; box landed as [?] on $COORD_BASE; worktrees cleaned"
+      session_log "mr $raw: $url merged into $w_base, not $TARGET_BASE; box landed as [?] on $COORD_BASE; worktrees cleaned" ;;
     *)
-      echo "mr $raw: $url opened from $s${retarget_note}; box landed as [$sym] on $COORD_BASE; worktrees cleaned" ;;
+      echo "mr $raw: $url opened from $s${retarget_note}; box landed as [$sym] on $COORD_BASE; worktrees cleaned"
+      session_log "mr $raw: $url opened from $s${retarget_note}; box landed as [$sym] on $COORD_BASE; worktrees cleaned" ;;
   esac
   return 0
 }

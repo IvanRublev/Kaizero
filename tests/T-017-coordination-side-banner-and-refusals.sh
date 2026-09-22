@@ -38,7 +38,10 @@ check "T1 no todo/target line" "$(echo "$out" | grep -c 'Todo .*\. Target ')" "0
 # T2 — disjoint repos: two-root banner, zero.sh lands in the coordination repo (SAME_REPO=0)
 mkrepo "$TT/code"; mkrepo "$TT/plan"; mktodo "$TT/plan"
 out=$(emit "$TT/code" "$TT/plan/todo.md")
-check "T2 banner" "$(echo "$out" | grep -c "Todo $TT/plan@main . Target $TT/code@main")" "1"
+# two checks, not one combined pattern: TASK-063 wraps Todo/Target onto separate interior lines
+# once the combined text passes 76 columns, which a $TESTROOT-length fixture path always does.
+check "T2 banner Todo" "$(echo "$out" | grep -c "Todo $TT/plan@main")" "1"
+check "T2 banner Target" "$(echo "$out" | grep -c "Target $TT/code@main")" "1"
 check "T2 zero.sh" "$([ -f "$TT/plan/.git/zero.sh" ] && echo yes || echo no)" "yes"
 # want yes — never in target
 check "T2 no leak" "$([ -f "$TT/code/.git/zero.sh" ] && echo NO || echo yes)" "yes"
@@ -96,7 +99,10 @@ check "T21 -h offers no same-repo MR" "$(printf '%s' "$HELP" | grep -ci 'pull re
 mkrepo "$TT/code21"; mkrepo "$TT/plan21"; mktodo "$TT/plan21"
 ( cd "$TT/code21"; git remote add origin https://github.com/acme/code21.git )
 out=$( ( cd "$TT/code21"; KAIZERO_TEST_EMIT=1 timeout 20 bash "$SCRIPT" "$TT/plan21/todo.md" 2>&1 ) )
-check "T21 default banner, no mode word" "$(echo "$out" | grep -c "Todo $TT/plan21@main \. Target $TT/code21@main \. Fork -> implement -> commit -> pull request (gh)")" "1"
+# three checks, not one combined pattern — same TASK-063 wrap as T2 above.
+check "T21 default banner Todo" "$(echo "$out" | grep -c "Todo $TT/plan21@main")" "1"
+check "T21 default banner Target" "$(echo "$out" | grep -c "Target $TT/code21@main")" "1"
+check "T21 default banner mode word" "$(echo "$out" | grep -c 'Fork -> implement -> commit -> pull request (gh)')" "1"
 # T21 PASS — -h states, next to todo-file-path, the layout paragraph, the <id>-… prefix rule, and
 # the reopen-by-unchecking path, and offers no request-landing wording for a same-repository
 # launch (the layout it refuses); a two-repository launch with a github origin and no flag prints
