@@ -144,15 +144,25 @@ grading is not.
 `tests/test-runner.sh` are the four scripts every scenario and every run of the suite depends on.
 
 A full-suite run routinely exceeds a single Bash call's timeout budget, so `tests/test-runner.sh`
-runs backgrounded. Wait for it with the `Monitor` tool, filtered to batch once per 50 completed
-scenarios, FAIL/ERROR and the final SUITE/wall-clock/residue lines still immediate:
+runs backgrounded. Launch it so its own exit code lands in `$LOG`, not just its stdout/stderr:
+
+```
+nohup bash -c 'tests/test-runner.sh; echo "RUNNER_EXIT:$?" >> "'"$LOG"'"' > "$LOG" 2>&1 &
+```
+
+Wait for it with the `Monitor` tool, filtered to batch once per 20 completed scenarios,
+FAIL/ERROR and the final SUITE/wall-clock/residue lines still immediate, exiting early on a
+nonzero `RUNNER_EXIT` — a launch failure (missing exec bit, bad path, ...) so it returns instead
+of waiting out its full timeout on a runner that never started:
 
 ```
 tail -n +1 -f "$LOG" | awk '
+/^RUNNER_EXIT:0$/ { exit 0 }
+/^RUNNER_EXIT:/ { print; fflush(); exit 1 }
 /FAIL|ERROR/ { print; fflush(); next }
 / done \(/ {
   n++; buf = buf $0 "\n"
-  if (n % 50 == 0) { print buf; buf=""; fflush() }
+  if (n % 20 == 0) { print buf; buf=""; fflush() }
   next
 }
 /SUITE|wall-clock|residue/ { print; fflush() }
