@@ -2707,10 +2707,11 @@ register_target() {
 
 # TASK-059e: write <repo>/.git/hooks/prepare-commit-msg once per repo, given that repo's root as
 # $1 — git worktrees share one common git dir's hooks/, so one install per repo covers every
-# worktree kaizero.sh creates there. Appends the Kaizero co-author trailer to every commit made in
-# that repo unless KAIZERO_NO_CO_AUTHORSHIP is set in the hook's own environment (reached via the
-# claude launch env, same as KAIZERO_INSTANCE) or the trailer is already present (idempotent
-# against amend/reword). Never touches any other line already in the message, including a
+# worktree kaizero.sh creates there. Appends the Kaizero co-author trailer only to a commit made
+# by a kaizero.sh-launched Claude session (its environment carries KAIZERO_INSTANCE, inherited by
+# its Bash-tool children; a plain interactive shell never sets it) — unless KAIZERO_NO_CO_AUTHORSHIP
+# is also set in that same environment, or the trailer is already present (idempotent against
+# amend/reword). Never touches any other line already in the message, including a
 # session's own Claude co-author trailer. Called once for TARGET_ROOT and, only when it differs
 # (SAME_REPO=0), once more for COORD_ROOT — the two repos Kaizero ever commits into.
 write_prepare_commit_msg_hook() {
@@ -2718,6 +2719,7 @@ write_prepare_commit_msg_hook() {
     hook="$gitdir/hooks/prepare-commit-msg"
     cat >"$hook" <<'HOOK_EOF'
 #!/usr/bin/env bash
+[ -n "${KAIZERO_INSTANCE:-}" ] || exit 0
 [ -n "${KAIZERO_NO_CO_AUTHORSHIP:-}" ] && exit 0
 msg_file="$1"
 grep -qF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg_file" 2>/dev/null && exit 0
