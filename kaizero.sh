@@ -5659,7 +5659,10 @@ fmt_finding() {
       loc="${rec%%$'\t'*}"; raw="${rec#*$'\t'}"
       printf '%s %s: %s  %s\n' "$cls" "$id" "$loc" "$raw" ;;
     PATFAIL)
-      printf '    first token `%s` does not match KAIZERO_TASK_ID_PATTERN\n' "$rec" ;;
+      printf '    first token `%s` does not match KAIZERO_TASK_ID_PATTERN\n' "$rec"
+      if [[ "${KAIZERO_TASK_ID_PATTERN:-$TASK_ID_PATTERN_DEFAULT}" == "$TASK_ID_PATTERN_DEFAULT" ]]; then
+        printf '    e.g. - [ ] SMTH-855 Add retry logic to the sync endpoint\n'
+      fi ;;
     duplicate-id-history)
       printf 'duplicate-id-history %s: %s\n' "${rec%%$'\t'*}" "${rec#*$'\t'}" ;;
     reused-id-gap)
