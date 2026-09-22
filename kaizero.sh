@@ -975,7 +975,7 @@ while true; do
     # the same directory already carries EXIT_REASON_FILE/SAFE_TO_EXIT_FILE with no separate guard.
     session_record_write "$CLAUDE_WRAPPER_PID" "$SESSION_EPOCH" || true
     cd "$COORD_ROOT"
-    arm_watchdog "$CLAUDE_WRAPPER_PID" "$SESSION_TRANSCRIPT" "$SESSION_EPOCH"
+    arm_watchdog "$CLAUDE_WRAPPER_PID" "$SID" "$SESSION_EPOCH"
     # backgrounded on purpose: bash defers every trap until a FOREGROUND child exits, so a TERM
     # arriving while claude hangs could never be handled. `wait` IS interruptible — it returns
     # 128+N when a trapped signal fires — so re-enter it until claude is actually gone.
@@ -1729,6 +1729,21 @@ parse_dur() {
 # since the transcript keeps growing either way.
 transcript_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true; }   # GNU first: GNU's own -f means filesystem-status and silently succeeds on a bogus %m, so a BSD-first order never falls through
 
+# find_session_transcript SID -> the real transcript path Claude Code is writing for this
+# --session-id, discovered rather than predicted. Claude Code names the LEAF file after the
+# session id it was given (a value kaizero.sh itself mints and controls), but the PARENT
+# directory's name is Claude Code's own undocumented encoding of the launch cwd — a naive
+# slash-to-dash reimplementation of that encoding silently drifts from reality (e.g. a cwd with a
+# dotfile-style path segment: Claude Code's real project dir also folds that leading "." into a
+# second "-", a rule kaizero.sh's own encoding never matched — the false watchdog kill this
+# function exists to fix). Globbing for the known, controlled leaf name across every project
+# directory sidesteps needing to know Claude Code's encoding at all, so a future change to it
+# breaks nothing here. mindepth/maxdepth 2 bounds the search to exactly project-dir/session.jsonl,
+# never deeper. Prints nothing (not an error) until Claude Code has actually created the file.
+find_session_transcript() {
+  find "$HOME/.claude/projects" -mindepth 2 -maxdepth 2 -name "$1.jsonl" 2>/dev/null | head -n 1
+}
+
 # BUG 058a: a subagent writes only to its own subagents/agent-*.jsonl under the SAME session
 # directory as the main transcript, never to the main transcript itself, at any lineage depth
 # (find walks the whole subtree, so a subagent of a subagent is included the same way) — so a
@@ -1872,14 +1887,20 @@ build_claude_cmd_string() {
 arm_watchdog() {
   WATCHDOG_PID=""
   [ "$WATCHDOG_SECS" -gt 0 ] || return 0
-  local pid=$1 tp=$2 epoch=$3
+  local pid=$1 sid=$2 epoch=$3
   {
-    local left=$WATCHDOG_SECS sdir marker sig siglast
-    sdir="${tp%.jsonl}"
+    local left=$WATCHDOG_SECS tp sdir marker sig siglast
     marker="${STOP_MARKER_FILE:-}"
+    # $tp is re-discovered every tick, never trusted from an earlier tick or predicted up front —
+    # see find_session_transcript's own comment: Claude Code may not have created the file yet on
+    # an early tick (this degrades the same as a missing file always has, never a new failure
+    # mode), and re-globbing is as cheap as the descendant-tree walks this same loop already does
+    # every tick elsewhere in this file.
+    tp="$(find_session_transcript "$sid")"; sdir="${tp%.jsonl}"
     siglast="$(tree_write_signature "$tp" "$sdir")"
     while [ "$left" -gt 0 ] && kill -0 "$pid" 2>/dev/null; do
       sleep "$WAIT_TICK"; left=$((left - WAIT_TICK))
+      tp="$(find_session_transcript "$sid")"; sdir="${tp%.jsonl}"
       sig="$(tree_write_signature "$tp" "$sdir")"
       turn_tree_state "$tp" "$sdir" "$marker"
       if [ "$TURN_PENDING" = 1 ] || { [ "$TURN_ACTIVE" = 1 ] && [ "$sig" != "$siglast" ]; }; then

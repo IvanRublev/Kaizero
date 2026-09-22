@@ -28,7 +28,7 @@ printf -- '- [ ] F1 x\n' > todo.md; git add -A; git commit -qm init
 # of directory naming, exactly as session_dir_signature's replacement does)
 cd "$TF/repo"
 rm -f "$TF/af1.transcript_path"
-printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\necho "stub af1"\nprintf "%%s" "$KAIZERO_SESSION_TRANSCRIPT" > "%s/af1.transcript_path"\nsleep 15\nexit 0\n' "$TF" > "$TF/bin/claude"
+printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\necho "stub af1"\nmkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"; : > "$KAIZERO_SESSION_TRANSCRIPT"\nprintf "%%s" "$KAIZERO_SESSION_TRANSCRIPT" > "%s/af1.transcript_path"\nsleep 15\nexit 0\n' "$TF" > "$TF/bin/claude"
 chmod +x "$TF/bin/claude"
 ( for i in $(seq 1 25); do
     sleep 1
@@ -94,6 +94,43 @@ check "AF4 no new env var" "$(grep -c 'KAIZERO_WATCHDOG_' "$REAL_SCRIPT")" "1"
 # the original signal is not replaced
 check "AF4 mtime kept" "$([ "$(grep -c 'transcript_mtime "\$tp"' "$REAL_SCRIPT")" -ge 1 ] && echo yes || echo no)" "yes"
 # AF4 PASS — no new env var = 0, mtime kept >= 1.
+
+# AF5 — regression: A-001-parallel-zeroing's real false-positive root cause, generalized.
+# arm_watchdog no longer predicts Claude Code's project-directory naming at all — it globs for
+# the transcript by the --session-id it minted and controls (find_session_transcript), so it
+# finds the file no matter which directory Claude Code actually put it in. Proven here by a stub
+# that deliberately writes its transcript somewhere find_session_transcript's OLD (dropped)
+# string-prediction would never have guessed: a session survives its full watchdog window purely
+# because the file is found by session id, the containing directory's name is irrelevant.
+cd "$TF/repo"
+rm -f "$TF/af5.fakedir"
+export AF5_TF="$TF"
+cat > "$TF/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-}" = -v ] && { echo "stub-claude 0.0.0"; exit 0; }
+sid=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = --session-id ]; then sid="$2"; break; fi
+  shift
+done
+echo "stub af5 sid=$sid"
+fake_dir="$HOME/.claude/projects/af5-deliberately-wrong-naming-$$"
+mkdir -p "$fake_dir"
+printf '%s\n' '{"type":"assistant","message":{"stop_reason":"tool_use"}}' > "$fake_dir/$sid.jsonl"
+printf '%s' "$fake_dir" > "$AF5_TF/af5.fakedir"
+sleep 12
+exit 0
+STUB
+chmod +x "$TF/bin/claude"
+PATH="$TF/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 30 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TF/af5.log" 2>&1
+# the stub slept out well past the 5s window and exited on its own, same shape as TW8
+check "AF5 exit" "$?" "0"
+check "AF5 no watchdog kill despite transcript at a directory kaizero.sh never predicted" \
+  "$(grep -c '❄ Watchdog ·' "$TF/af5.log")" "0"
+AF5_FAKE_DIR="$(cat "$TF/af5.fakedir" 2>/dev/null)"
+case "$AF5_FAKE_DIR" in "$HOME/.claude/projects/af5-deliberately-wrong-naming-"*) rm -rf "$AF5_FAKE_DIR" ;; esac
+unset AF5_TF
+# AF5 PASS — exit = 0, watchdog line = 0: found by session id, not by a guessed directory name.
 
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"
 if [ "$KAIZERO_TEST_MODE" = implementor ] && { [ "$FAILED" = 1 ] || [ "$ERRORED" = 1 ]; }; then
