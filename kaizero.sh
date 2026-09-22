@@ -953,6 +953,7 @@ while true; do
             KAIZERO_SESSION_LOG="$SESSION_LOG_FILE" \
             KAIZERO_NO_CO_AUTHORSHIP="${KAIZERO_NO_CO_AUTHORSHIP:-}" \
             bash -c 'trap "" TERM; exec "$@"' term-ignoring-wrapper \
+            env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION \
             script -q /dev/null claude "${CLAUDE_ARGS[@]}" "$PROMPT" >&4 2>&4 <&3 &
     else
         CLAUDE_CMD="$(build_claude_cmd_string "${CLAUDE_ARGS[@]}" "$PROMPT")"
@@ -964,6 +965,7 @@ while true; do
             KAIZERO_SESSION_LOG="$SESSION_LOG_FILE" \
             KAIZERO_NO_CO_AUTHORSHIP="${KAIZERO_NO_CO_AUTHORSHIP:-}" \
             bash -c 'trap "" TERM; exec "$@"' term-ignoring-wrapper \
+            env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION \
             script -qc "$CLAUDE_CMD" /dev/null >&4 2>&4 <&3 &
     fi
     CLAUDE_WRAPPER_PID=$!

@@ -314,6 +314,7 @@ check "G3 mr never pushed" "$(git -c safe.bareRepository=all -C "$TR/three-code-
 
 # same two remaining failing fixtures as G1/G2 (missing-both, missing-sr), through `mr` too — the
 # three-fixture parity TASK-058f's own AC text promises for `mr_task`, not just the one above.
+"$ZERO3" release M1 "$t3" >/dev/null 2>&1 || true
 t3b=$("$ZERO3" claim M2)
 echo work3b > "$t3b/n3b.txt"; git -C "$t3b" add n3b.txt; git -C "$t3b" commit -qm work3b
 out=$("$ZERO3" mr M2 "$t3b" 2>&1); rc=$?
@@ -322,6 +323,7 @@ check "G3 mr missing-both names AC gate" "$(printf '%s' "$out" | grep -c 'missin
 check "G3 mr missing-both names SR gate" "$(printf '%s' "$out" | grep -c 'missing gate note: Agentic self-review gate')" "1"
 check "G3 mr missing-both box unchecked" "$(grep -c '\[ \] M2' todo.md)" "1"
 
+"$ZERO3" release M2 "$t3b" >/dev/null 2>&1 || true
 t3c=$("$ZERO3" claim M3)
 echo work3c > "$t3c/n3c.txt"; git -C "$t3c" add n3c.txt; git -C "$t3c" commit -qm work3c
 out=$("$ZERO3" mr M3 "$t3c" 2>&1); rc=$?
@@ -335,8 +337,6 @@ check "G3 mr never pushed (all three fixtures)" "$(git -c safe.bareRepository=al
 # all three failing fixtures (missing-evidence, missing-both, missing-sr): the origin's branch
 # count never grows, every box stays unchecked.
 
-"$ZERO3" release M1 "$t3" >/dev/null 2>&1 || true
-"$ZERO3" release M2 "$t3b" >/dev/null 2>&1 || true
 "$ZERO3" release M3 "$t3c" >/dev/null 2>&1 || true
 
 # G4 — the same realistic tick-after-claim flow as G2b, in `mr` mode: the AC edit + gate notes
