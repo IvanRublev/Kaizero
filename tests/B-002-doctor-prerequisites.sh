@@ -84,6 +84,32 @@ if out=$(cd "$TB/notgit" && timeout 20 bash "$SCRIPT" -h 2>&1); then rc=0; else 
 if [ "$rc" = 0 ] && echo "$out" | grep -qi '^usage:' && ! echo "$out" | grep -qi 'not a git repository'; then r11=ok; else r11="rc=$rc: $out"; fi
 check "B11 help-outside-git" "$r11" "ok"
 
+# B13 — --version prints exactly VERSION and exits 0, outside any git repository
+EXPECTED_VERSION="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$REAL_SCRIPT" | head -1)"
+if out=$(cd "$TB/notgit" && timeout 20 bash "$SCRIPT" --version 2>&1); then rc=0; else rc=$?; fi
+if [ "$rc" = 0 ] && [ "$out" = "$EXPECTED_VERSION" ]; then r13=ok; else r13="rc=$rc: $out"; fi
+check "B13 version-prints-version" "$r13" "ok"
+
+# B14 — --version short-circuits: combined with another flag and a todo-file-path it still just
+# prints the version, and reads no todo file (the named one does not exist) and launches no claude
+# (the stub below would leave a marker if it ran).
+mkdir -p "$TB/bin-versionprobe"
+printf '#!/usr/bin/env bash\ntouch "%s"\n' "$TB/claude-ran" > "$TB/bin-versionprobe/claude"
+chmod +x "$TB/bin-versionprobe/claude"
+if out=$(cd "$TB/notgit" && HOME="$TB/emptyhome" PATH="$TB/bin-versionprobe:$PATH" timeout 20 "$BASH_BIN" "$SCRIPT" --local-merge --version no-such-todo.md 2>&1); then rc=0; else rc=$?; fi
+if [ "$rc" = 0 ] && [ "$out" = "$EXPECTED_VERSION" ] && [ ! -e "$TB/claude-ran" ]; then r14=ok; else r14="rc=$rc: $out"; fi
+check "B14 version-short-circuits" "$r14" "ok"
+
+# B15 — -h/--help's own flag list names --version, so it is discoverable without the README
+if out=$(cd "$TB/notgit" && timeout 20 bash "$SCRIPT" -h 2>&1); then rc=0; else rc=$?; fi
+if [ "$rc" = 0 ] && echo "$out" | grep -q -- '--version'; then r15=ok; else r15="rc=$rc: $out"; fi
+check "B15 help-lists-version" "$r15" "ok"
+
+# B16 — absence check: --version is never swallowed as -t/--taskprompt's value
+if out=$(cd "$TB/notgit" && timeout 20 bash "$SCRIPT" -t --version 2>&1); then rc=0; else rc=$?; fi
+if [ "$rc" != 0 ] && [ "$out" != "$EXPECTED_VERSION" ]; then r16=ok; else r16="rc=$rc: $out"; fi
+check "B16 version-not-taskprompt-value" "$r16" "ok"
+
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"
 if [ "$KAIZERO_TEST_MODE" = implementor ] && { [ "$FAILED" = 1 ] || [ "$ERRORED" = 1 ]; }; then
   echo "TESTROOT retained for implementor mode: $TESTROOT"
