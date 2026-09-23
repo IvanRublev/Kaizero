@@ -66,9 +66,16 @@ cat > "$TAA/bin/claude" <<'EOF'
 # python3's real sigaction()-based handler (same mechanism real claude uses) is needed instead.
 n=$(( $(cat "$ZTX/count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$ZTX/count"
 echo "stub run $n"
+# BUG-071 mechanism 3: the watchdog no longer decays while a transcript has no parseable
+# assistant/user record at all, so this stub must write one before it goes unresponsive, or the
+# watchdog's grace period never ends (same fix as AA-002's aahung).
 if [ "$n" = 1 ]; then exec python3 -c "
-import signal, sys, time
+import signal, sys, time, os, json
 signal.signal(signal.SIGTERM, lambda s, f: sys.exit(143))
+tp = os.environ.get('KAIZERO_SESSION_TRANSCRIPT')
+if tp:
+    os.makedirs(os.path.dirname(tp), exist_ok=True)
+    open(tp, 'a').write(json.dumps({'type': 'assistant', 'uuid': 'stub-1', 'message': {'stop_reason': 'end_turn'}}, separators=(',', ':')) + '\n')
 time.sleep(1000)"
 fi
 exit 0
@@ -122,9 +129,15 @@ cat > "$TAA/bin/claude" <<'EOF'
 # is needed for run 1's hang to actually be TERM-killable at all.
 n=$(( $(cat "$ZTX/count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$ZTX/count"
 echo "stub run $n"
+# BUG-071 mechanism 3: same transcript-write requirement as AA7 above, or the watchdog window
+# never decays.
 if [ "$n" = 1 ]; then exec python3 -c "
-import signal, sys, time
+import signal, sys, time, os, json
 signal.signal(signal.SIGTERM, lambda s, f: sys.exit(143))
+tp = os.environ.get('KAIZERO_SESSION_TRANSCRIPT')
+if tp:
+    os.makedirs(os.path.dirname(tp), exist_ok=True)
+    open(tp, 'a').write(json.dumps({'type': 'assistant', 'uuid': 'stub-1', 'message': {'stop_reason': 'end_turn'}}, separators=(',', ':')) + '\n')
 time.sleep(1000)"
 else exit 143; fi
 EOF
