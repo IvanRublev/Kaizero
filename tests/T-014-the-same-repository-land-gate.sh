@@ -23,9 +23,9 @@ T22="$TESTROOT/T22"; mkdir -p "$T22/repo" "$T22/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$T22/bin/claude"; chmod +x "$T22/bin/claude"
 cd "$T22/repo"
 git init -q -b main; git config user.email t@t.t; git config user.name test
-printf -- '- [ ] S1 staged file task\n- [ ] S2 pre-commit task\n- [ ] S3 absent line task\n- [ ] S4 touches todo task\n- [ ] S5 two commits task\n- [ ] S6 no-commit task\n- [ ] S7 code-hook task\n- [ ] S8 second-worktree task\n' > todo.md
+printf -- '- [ ] S1 staged file task\n- [ ] S2 pre-commit task\n- [ ] S3 absent line task\n- [ ] S4 touches todo task\n- [ ] S5 two commits task\n- [ ] S6 no-commit task\n- [ ] S7 code-hook task\n- [ ] S8 second-worktree task\n- [ ] S9 reclaimed-after-landing task\n' > todo.md
 mkdir -p tasks
-for f in S1 S2 S3 S4 S5 S6 S7 S8; do printf -- '### Acceptance criteria\n- [ ] x\n' > "tasks/$f.md"; done
+for f in S1 S2 S3 S4 S5 S6 S7 S8 S9; do printf -- '### Acceptance criteria\n- [ ] x\n' > "tasks/$f.md"; done
 git add -A; git commit -qm init
 PATH="$T22/bin:$PATH" KAIZERO_TEST_EMIT=1 timeout 20 bash "$SCRIPT" --local-merge todo.md >/dev/null 2>&1 || true
 ZERO="$(cd "$(git rev-parse --git-dir)" && pwd)/zero.sh"
@@ -144,6 +144,29 @@ check "T22 S8 operator branch kept" "$([ "$(git symbolic-ref --short HEAD)" = "o
 check "T22 S8 no zero commit elsewhere" "$(git log --format=%s operator-branch8 | grep -c '^zero S8$')" "0"
 git worktree remove --force "$SIDE8" 2>/dev/null || true
 git checkout -q main
+"$ZERO" release S8 >/dev/null 2>&1   # one task per session: free the slot before S9's own claim
+
+# S9 (BUG-059a / BUG-068 regression): an id whose code genuinely landed through merge_same_repo,
+# then has its box reverted to [ ] by hand and is reclaimed with no new commit, still skips the
+# code merge and ticks the box — the same_repo_landed_ref marker written by the first landing is
+# what tells this apart from S6's genuinely-untouched claim, since both reclaim-time branches sit
+# exactly at their own fork point (head == fork) either way.
+WT9=$("$ZERO" claim S9)
+git -C "$WT9" commit -q --allow-empty -m "S9 work"
+"$ZERO" merge S9 "$WT9" '?' >/dev/null; rc9a=$?
+check "T22 S9 first landing exit" "$rc9a" "0"
+check "T22 S9 first landing box" "$(grep -c '\[?\] S9' todo.md)" "1"
+sed -i.bak 's/\[?\] S9/[ ] S9/' todo.md; rm -f todo.md.bak
+git add todo.md; git commit -qm "human reverts S9 box"
+before9=$(git rev-list --count main)
+WT9b=$("$ZERO" claim S9)
+"$ZERO" merge S9 "$WT9b" '?' >/dev/null 2>&1; rc9b=$?
+after9=$(git rev-list --count main)
+check "T22 S9 reclaim exit" "$rc9b" "0"
+check "T22 S9 reclaim box" "$(grep -c '\[?\] S9' todo.md)" "1"
+check "T22 S9 reclaim only tick commit" "$((after9 - before9))" "1"
+check "T22 S9 reclaim no merge commit" "$(git log --format=%s -1 | grep -c '^zero S9$')" "1"
+
 # T22 PASS — S5 lands with exactly two new commits and a stat touching only the todo file; S1's
 # unrelated staged file blocks nothing and survives untouched; S2's rejected tick fails the merge
 # at the land gate (exit 5) leaving the todo clean and the worktree/branch in place, and a retry
@@ -154,7 +177,9 @@ git checkout -q main
 # itself (not a conflict) and the crash marker it leaves behind is exactly what lets the retry,
 # once the hook is gone, abort the leftover MERGE_HEAD and land with one merge commit, not two;
 # S8's checkout failure (main already held by a second worktree) exits 5 and leaves the operator's
-# own branch untouched.
+# own branch untouched; S9's genuinely-landed id, box reverted by hand and reclaimed with no new
+# commit, skips the code merge and lands with exactly one tick commit (BUG-059a via BUG-068's
+# same_repo_landed_ref marker).
 
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"
 if [ "$KAIZERO_TEST_MODE" = implementor ] && { [ "$FAILED" = 1 ] || [ "$ERRORED" = 1 ]; }; then
