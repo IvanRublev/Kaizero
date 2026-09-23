@@ -46,7 +46,10 @@ printf '#!/usr/bin/env bash\n[ "${1:-}" = -v ] && { echo "1.0.0 (test stub)"; ex
 chmod +x "$TN/bin/claude"
 ( for i in $(seq 1 25); do
     sleep 1
-    [ -f "$TN/n4.transcript_path" ] && printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}' >> "$(cat "$TN/n4.transcript_path")" 2>/dev/null
+    # BUG-071: each append carries its own distinct uuid — the mechanism-1 signature is now the
+    # newest record's own uuid, not raw mtime, so a real advancing transcript (every genuine
+    # record from Claude Code carries a fresh uuid) must vary it the same way to stay realistic.
+    [ -f "$TN/n4.transcript_path" ] && printf '%s\n' "{\"type\":\"user\",\"uuid\":\"n4-uuid-$i\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}" >> "$(cat "$TN/n4.transcript_path")" 2>/dev/null
   done ) > "$TN/toucher.out" 2>&1 &
 TOUCHER=$!
 PATH="$TN/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 60 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TN/busy.log" 2>&1
@@ -111,11 +114,14 @@ TVAR="$(cat "$TN/n7.transcript_var" 2>/dev/null)"
 check "N7 transcript var" "$(printf '%s' "$TVAR" | grep -c "^$HOME/.claude/projects/.*/$SID_ARG\.jsonl\$")" "1"
 # N7 PASS — exit = 0, session-id flag = 1, transcript var = 1.
 
-# N8 — the transcript-mtime sample is never dropped (BUG 058a widens it, does not replace it)
-N8_COUNT="$(grep -c 'transcript_mtime "\$tp"' "$REAL_SCRIPT")"
-# the original ISSUE 032 signal is still sampled every tick
+# N8 — the transcript liveness sample is never dropped (BUG 058a widened it, did not replace it;
+# BUG-071 superseded the sample's own mechanism the same way it once superseded raw mtime for the
+# marker: content — the newest record's own uuid — not `stat`, so a mismatched-second race can
+# never misfire it. See newest_record_uuid's own comment.)
+N8_COUNT="$(grep -c 'newest_record_uuid "\$tp"' "$REAL_SCRIPT")"
+# the transcript is still sampled every tick, just by content now, not mtime
 check "N8 mtime kept" "$([ "$N8_COUNT" -ge 1 ] && echo ok || echo "count=$N8_COUNT")" "ok"
-# N8 PASS — mtime kept >= 1. BUG 058a (tests/AF-001-watchdog-progress-signals.sh, AF4) is where
+# N8 PASS — sample kept >= 1. BUG 058a (tests/AF-001-watchdog-progress-signals.sh, AF4) is where
 # the CPU-descendant signal this once forbade (ps -o time=) is now asserted present, and where
 # the exclusion of CLAUDE_WRAPPER_PID/$recorded_pid itself from that sample is asserted.
 

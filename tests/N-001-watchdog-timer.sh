@@ -32,7 +32,10 @@ cd "$TN/repo"
 # SIG_IGN at that shell's own startup, so a bash stub can never model "an obedient claude that
 # dies to TERM" via `trap`. Real claude (Node) overrides the inherited ignore via its own
 # sigaction() call — python3's signal.signal is the same real mechanism, not a shell trap.
-printf '#!/usr/bin/env python3\nimport sys, signal, time\nif len(sys.argv) > 1 and sys.argv[1] == "-v":\n    print("stub-claude 0.0.0"); sys.exit(0)\nsignal.signal(signal.SIGTERM, lambda s, f: sys.exit(143))\nprint("stub hung", flush=True)\ntime.sleep(1000)\n' > "$TN/bin/claude"; chmod +x "$TN/bin/claude"
+# BUG-071 mechanism 3: the watchdog no longer decays while a transcript has no parseable
+# assistant/user record at all, so this stub must write one (a real Claude Code process writes its
+# transcript promptly) before it goes unresponsive, or the watchdog's grace period never ends.
+printf '#!/usr/bin/env python3\nimport sys, signal, time, os, json\nif len(sys.argv) > 1 and sys.argv[1] == "-v":\n    print("stub-claude 0.0.0"); sys.exit(0)\nsignal.signal(signal.SIGTERM, lambda s, f: sys.exit(143))\ntp = os.environ.get("KAIZERO_SESSION_TRANSCRIPT")\nif tp:\n    os.makedirs(os.path.dirname(tp), exist_ok=True)\n    open(tp, "a").write(json.dumps({"type": "assistant", "uuid": "stub-1", "message": {"stop_reason": "end_turn"}}, separators=(",", ":")) + "\\n")\nprint("stub hung", flush=True)\ntime.sleep(1000)\n' > "$TN/bin/claude"; chmod +x "$TN/bin/claude"
 PATH="$TN/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 90 env KAIZERO_MAX_LOOPS=2 bash "$SCRIPT" --local-merge todo.md -t x > "$TN/hang.log" 2>&1
 # the watchdog's kill is a restart, not a failure of the run
 check "N1 exit" "$?" "0"
@@ -49,7 +52,8 @@ check "N1 orphans" "$(pgrep -f "$TN/bin/claude" | wc -l | tr -d ' ')" "0"
 
 # N2 — a claude that ignores SIGTERM is SIGKILLed
 cd "$TN/repo"
-printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\ntrap "" TERM\necho "stub deaf"\nsleep 1000\n' > "$TN/bin/claude"; chmod +x "$TN/bin/claude"
+# BUG-071 mechanism 3: write a real record first, same reason as N1 above.
+printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\ntrap "" TERM\nmkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"; echo '"'"'{"type":"assistant","uuid":"stub-1","message":{"stop_reason":"end_turn"}}'"'"' >> "$KAIZERO_SESSION_TRANSCRIPT"\necho "stub deaf"\nsleep 1000\n' > "$TN/bin/claude"; chmod +x "$TN/bin/claude"
 PATH="$TN/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 90 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TN/deaf.log" 2>&1
 # not 124: the timer, not the harness, ended it
 check "N2 exit" "$?" "0"
@@ -86,7 +90,8 @@ cd "$TN/repo"
 # marker rather than a `kill -0` on a pid read from a file — a file the stub never wrote would
 # make the old oracle pass whether or not the child died.
 MARK="n5child-$RANDOM"
-printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\nbash -c '"'"'trap "" TERM; exec sleep 1000'"'"' "%s" &\necho "stub obedient parent, deaf child"\nsleep 1000\n' "$MARK" > "$TN/bin/claude"
+# BUG-071 mechanism 3: write a real record first, same reason as N1 above.
+printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\nmkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"; echo '"'"'{"type":"assistant","uuid":"stub-1","message":{"stop_reason":"end_turn"}}'"'"' >> "$KAIZERO_SESSION_TRANSCRIPT"\nbash -c '"'"'trap "" TERM; exec sleep 1000'"'"' "%s" &\necho "stub obedient parent, deaf child"\nsleep 1000\n' "$MARK" > "$TN/bin/claude"
 chmod +x "$TN/bin/claude"
 PATH="$TN/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 90 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TN/tree.log" 2>&1
 check "N5 exit" "$?" "0"
@@ -109,7 +114,8 @@ cd "$TN/repo"
 # only dies if the watchdog's kill walks the tree (terminator.sh's descendant TERM/KILL sweep)
 # instead of signaling claude's own pid alone
 printf '#!/usr/bin/env bash\nsleep 1000\n' > "$TN/bin/zero.sh"; chmod +x "$TN/bin/zero.sh"
-printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\n"%s/bin/zero.sh" mr FAKE-1 /fake/wt &\necho "$!" > "%s/mr-child.pid"\necho "stub running zero.sh mr"\nwait\n' "$TN" "$TN" > "$TN/bin/claude"
+# BUG-071 mechanism 3: write a real record first, same reason as N1 above.
+printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\nmkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"; echo '"'"'{"type":"assistant","uuid":"stub-1","message":{"stop_reason":"end_turn"}}'"'"' >> "$KAIZERO_SESSION_TRANSCRIPT"\n"%s/bin/zero.sh" mr FAKE-1 /fake/wt &\necho "$!" > "%s/mr-child.pid"\necho "stub running zero.sh mr"\nwait\n' "$TN" "$TN" > "$TN/bin/claude"
 chmod +x "$TN/bin/claude"
 PATH="$TN/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 90 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TN/mr-watchdog.log" 2>&1
 # the watchdog's kill is a restart, not a failure of the run

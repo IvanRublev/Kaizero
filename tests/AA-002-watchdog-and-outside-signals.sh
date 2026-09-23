@@ -39,7 +39,10 @@ printf -- '- [ ] AA1 x\n' > todo.md; git add -A; git commit -qm init
 # model "an obedient claude that dies to TERM" via `trap ... TERM` here — it needs a real
 # sigaction()-based handler (python3), the same mechanism claude itself actually uses, to prove
 # the signal is deliverable at all.
-aahung(){ printf '#!/usr/bin/env python3\nimport sys, signal, time\nif len(sys.argv) > 1 and sys.argv[1] == "-v":\n    print("stub-claude 0.0.0"); sys.exit(0)\nsignal.signal(signal.SIGTERM, lambda s, f: sys.exit(143))\nprint("stub hung", flush=True)\ntime.sleep(1000)\n' > "$TAA/bin/claude"; chmod +x "$TAA/bin/claude"; }
+# BUG-071 mechanism 3: the watchdog no longer decays while a transcript has no parseable
+# assistant/user record at all, so this stub must write one (a real Claude Code process writes its
+# transcript promptly) before it goes unresponsive, or the watchdog's grace period never ends.
+aahung(){ printf '#!/usr/bin/env python3\nimport sys, signal, time, os, json\nif len(sys.argv) > 1 and sys.argv[1] == "-v":\n    print("stub-claude 0.0.0"); sys.exit(0)\nsignal.signal(signal.SIGTERM, lambda s, f: sys.exit(143))\ntp = os.environ.get("KAIZERO_SESSION_TRANSCRIPT")\nif tp:\n    os.makedirs(os.path.dirname(tp), exist_ok=True)\n    open(tp, "a").write(json.dumps({"type": "assistant", "uuid": "stub-1", "message": {"stop_reason": "end_turn"}}, separators=(",", ":")) + "\\n")\nprint("stub hung", flush=True)\ntime.sleep(1000)\n' > "$TAA/bin/claude"; chmod +x "$TAA/bin/claude"; }
 # waits for the stub to be up, then signals IT (never the wrapper) — the "from outside" cases.
 aasig(){ local i=0; while ! pgrep -f "$TAA/bin/claude" >/dev/null 2>&1 && [ "$i" -lt 175 ]; do sleep 0.2; i=$((i+1)); done
         pkill -"$1" -f "$TAA/bin/claude"; }
@@ -57,7 +60,8 @@ check "AA3 not 93" "$(grep -c 'Code 93' "$TAA/wd.log")" "0"
 
 # AA4 — the SIGKILL escalation is 92, distinct from the TERM-only case
 cd "$TAA/repo"
-printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\ntrap "" TERM\necho "stub deaf"\nsleep 1000\n' > "$TAA/bin/claude"; chmod +x "$TAA/bin/claude"
+# BUG-071 mechanism 3: write a real record first, same reason as AA3's aahung above.
+printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\ntrap "" TERM\nmkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"; echo '"'"'{"type":"assistant","uuid":"stub-1","message":{"stop_reason":"end_turn"}}'"'"' >> "$KAIZERO_SESSION_TRANSCRIPT"\necho "stub deaf"\nsleep 1000\n' > "$TAA/bin/claude"; chmod +x "$TAA/bin/claude"
 PATH="$TAA/bin:$PATH" KAIZERO_WATCHDOG=5 KAIZERO_WATCHDOG_GRACE=2 timeout 90 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TAA/deaf.log" 2>&1
 check "AA4 exit" "$?" "0"
 check "AA4 code 92" "$(grep -c 'Code 92 - .*watchdog killed it 2s after the SIGTERM it ignored' "$TAA/deaf.log")" "1"
