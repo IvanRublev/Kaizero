@@ -15,10 +15,11 @@ All notable changes to Kaizero are documented here. Format follows
 
 ### Fixed
 
-- `merge_same_repo`'s already-landed detection now checks branch ancestry
-  (`git merge-base --is-ancestor`) instead of matching the merge commit's subject text, so a land
-  whose commit message doesn't literally read `merge <branch>` is recognized and its `todo.md` 
-  box ticks correctly.
+- `merge_same_repo`'s already-landed detection now checks a dedicated git ref written when a
+  land actually completes, instead of branch ancestry — ancestry was trivially true the moment
+  the surrounding guard ran, so it could not tell a genuinely untouched claim apart from one
+  whose code had already landed, and silently ticked the `todo.md` box for claims with no commit
+  at all.
 
 ## [0.1.4] - 2026-09-22
 
