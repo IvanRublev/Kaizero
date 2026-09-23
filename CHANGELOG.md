@@ -4,6 +4,23 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-09-23
+
+### Changed
+
+- a commit made by hand in a repository kaizero.sh manages no longer gets credited to Kaizero.
+- `PATFAIL` findings in the Release Todo List id-shape check now append a passing-example line
+  (`e.g. - [ ] SMTH-855 ...`) when the pattern in effect is the built-in default, so an operator
+  doesn't have to open README.md to see what shape is expected.
+
+### Fixed
+
+- `merge_same_repo`'s already-landed detection now checks a dedicated git ref written when a
+  land actually completes, instead of branch ancestry — ancestry was trivially true the moment
+  the surrounding guard ran, so it could not tell a genuinely untouched claim apart from one
+  whose code had already landed, and silently ticked the `todo.md` box for claims with no commit
+  at all.
+
 ## [0.1.4] - 2026-09-22
 
 ### Added

@@ -97,5 +97,8 @@
 - [x] TASK-065 Operator sees zero.sh's symlink and landing-outcome lines in kaizero.sh's own terminal output, relayed through a session-scoped log file discarded on exit
 - [x] TASK-066 kaizero's watchdog judges a hung claude by whether its turn has ended, across the whole agent tree, not by file mtime or unconditional CPU churn
 - [x] TASK-067 `kaizero --version` prints the installed version and exits
-- [?] TASK-070 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
-- [?] TASK-071 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
+- [x] BUG-068 `merge_same_repo`'s already-landed detection is an ancestry check that is trivially true the moment it runs, so it cannot tell "code already landed" apart from "nothing was ever committed" tasks/BUG-068.md
+- [x] TASK-069 A commit made outside a kaizero.sh-launched Claude session gets no Kaizero co-author trailer tasks/TASK-069.md
+- [x] TASK-070 `PATFAIL` error line shows a valid-id example when the pattern in effect is the default tasks/TASK-070.md
+- [?] TASK-080 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
+- [?] TASK-081 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again

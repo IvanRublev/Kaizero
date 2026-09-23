@@ -7,7 +7,7 @@
 # Run -h for usage.
 set -euo pipefail
 
-VERSION="0.1.4"
+VERSION="0.1.5"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
 
 # lowest released version of each forge CLI known to carry every flag/field assert_forge_flags
@@ -2707,10 +2707,11 @@ register_target() {
 
 # TASK-059e: write <repo>/.git/hooks/prepare-commit-msg once per repo, given that repo's root as
 # $1 — git worktrees share one common git dir's hooks/, so one install per repo covers every
-# worktree kaizero.sh creates there. Appends the Kaizero co-author trailer to every commit made in
-# that repo unless KAIZERO_NO_CO_AUTHORSHIP is set in the hook's own environment (reached via the
-# claude launch env, same as KAIZERO_INSTANCE) or the trailer is already present (idempotent
-# against amend/reword). Never touches any other line already in the message, including a
+# worktree kaizero.sh creates there. Appends the Kaizero co-author trailer only to a commit made
+# by a kaizero.sh-launched Claude session (its environment carries KAIZERO_INSTANCE, inherited by
+# its Bash-tool children; a plain interactive shell never sets it) — unless KAIZERO_NO_CO_AUTHORSHIP
+# is also set in that same environment, or the trailer is already present (idempotent against
+# amend/reword). Never touches any other line already in the message, including a
 # session's own Claude co-author trailer. Called once for TARGET_ROOT and, only when it differs
 # (SAME_REPO=0), once more for COORD_ROOT — the two repos Kaizero ever commits into.
 write_prepare_commit_msg_hook() {
@@ -2718,6 +2719,7 @@ write_prepare_commit_msg_hook() {
     hook="$gitdir/hooks/prepare-commit-msg"
     cat >"$hook" <<'HOOK_EOF'
 #!/usr/bin/env bash
+[ -n "${KAIZERO_INSTANCE:-}" ] || exit 0
 [ -n "${KAIZERO_NO_CO_AUTHORSHIP:-}" ] && exit 0
 msg_file="$1"
 grep -qF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg_file" 2>/dev/null && exit 0
@@ -4276,6 +4278,12 @@ branch_owner_id() {
 # repository, one checkout. Gate test 4 (quiet_checkout, full) runs first, inside MERGE_LOCK — not
 # repository-count-conditional: the hazard of a human's own merge/rebase/dirty tree in this one
 # checkout is today's too.
+# refs/kaizero/landed/<base>/<id> — written once tick_box succeeds inside merge_same_repo, read by
+# its own head==fork guard as the sole discriminator between "code already landed on $COORD_BASE"
+# and "never committed" (BUG-068). Namespaced under refs/kaizero so it can never collide with a
+# branch, tag, or a target repo's own ref; local to $COORD_ROOT only, never pushed.
+same_repo_landed_ref() { printf 'refs/kaizero/landed/%s/%s' "${COORD_BASE//\//-}" "$1"; }
+
 merge_same_repo() {
   local raw=$1 wt=$2 branch=$3 sym=$4 fork=${5:-} reason mb head merge_out merge_rc state wt_rc br_rc co_out cur skip_code_merge=0
   exec 10>"$MERGE_LOCK"; "$FLOCK_BIN" 10
@@ -4317,14 +4325,16 @@ merge_same_repo() {
   # BUG-059a: head==fork alone doesn't mean "no work" — a human can uncheck the box by hand after
   # an earlier, separate merge already landed this id's code. Two more facts distinguish that from
   # a genuinely untouched claim: the box's current symbol no longer matches the target, AND a
-  # "merge $branch" commit (task_branch is deterministic per id, so this exact message recurs
-  # every time this id lands) is already in COORD_BASE's history. Both true → the code is already
-  # on base, only the tick is missing — skip the code merge and go straight to tick_box below.
-  # Either false — box already matches, or this id never landed before — refuse exactly as today.
+  # same_repo_landed_ref for this id exists (BUG-068: a marker written the moment an earlier call
+  # to this function actually ticked the box, not an is-ancestor check — under this guard head
+  # already equals fork by construction, so ancestry against $COORD_BASE is trivially true for a
+  # never-committed branch too and cannot tell the two apart). Both true → the code is already on
+  # base, only the tick is missing — skip the code merge and go straight to tick_box below. Either
+  # false — box already matches, or this id never landed before — refuse exactly as today.
   head=$(git -C "$COORD_ROOT" rev-parse "$branch")
   if [ -n "$fork" ] && [ "$head" = "$fork" ]; then
     cur=$(box_symbol_on_base "$raw") || cur=""
-    if [ "$cur" != "$sym" ] && git -C "$COORD_ROOT" log --format=%s "$COORD_BASE" | grep -Fxq "merge $branch"; then
+    if [ "$cur" != "$sym" ] && git -C "$COORD_ROOT" rev-parse -q --verify "$(same_repo_landed_ref "$raw")" >/dev/null 2>&1; then
       skip_code_merge=1
     else
       exec 10>&-
@@ -4388,6 +4398,7 @@ merge_same_repo() {
       echo "merge $raw: land gate failed at local: tick commit for $raw was rejected in $COORD_ROOT: $(cat "$TICK_FAIL_FILE" 2>/dev/null)" >&2
       return 5 ;;
   esac
+  git -C "$COORD_ROOT" update-ref "$(same_repo_landed_ref "$raw")" "$head" 2>/dev/null || true
   if [ "$stashed" = 1 ]; then git -C "$COORD_ROOT" stash pop --quiet --index 2>/dev/null || echo "merge $raw: warning: stash pop failed — an unrelated staged/modified file is stuck in git stash list; recover it by hand" >&2; fi
 
   # Cleanup stays inside MERGE_LOCK — see the two-repository case's comment on why (a racing
@@ -5656,7 +5667,10 @@ fmt_finding() {
       loc="${rec%%$'\t'*}"; raw="${rec#*$'\t'}"
       printf '%s %s: %s  %s\n' "$cls" "$id" "$loc" "$raw" ;;
     PATFAIL)
-      printf '    first token `%s` does not match KAIZERO_TASK_ID_PATTERN\n' "$rec" ;;
+      printf '    first token `%s` does not match KAIZERO_TASK_ID_PATTERN\n' "$rec"
+      if [[ "${KAIZERO_TASK_ID_PATTERN:-$TASK_ID_PATTERN_DEFAULT}" == "$TASK_ID_PATTERN_DEFAULT" ]]; then
+        printf '    e.g. - [ ] SMTH-855 Add retry logic to the sync endpoint\n'
+      fi ;;
     duplicate-id-history)
       printf 'duplicate-id-history %s: %s\n' "${rec%%$'\t'*}" "${rec#*$'\t'}" ;;
     reused-id-gap)
