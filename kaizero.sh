@@ -1904,13 +1904,14 @@ newest_record_message_text() {
 # arm_watchdog resets on unconditionally, no accompanying write required). Bash 3.2 has no
 # associative arrays / namerefs, so these are plain globals rather than an out-parameter —
 # arm_watchdog is this function's only caller, sampling once per tick, so there is no reentrancy to
-# guard against. $3 (marker) is the Stop-hook turn marker for the MAIN session only: when its mtime
-# is at least as new as the main transcript's own, the hook has already confirmed this turn
-# concluded for the newest content, and that verdict is trusted over a transcript-parsed guess —
-# the one case this can matter is an end-of-turn event the tail-bounded parse above has not
-# resolved yet (AC: "judged concluded ... even where a transcript-level end-of-turn event has not
-# yet been parsed"). No such hook exists for a subagent (Claude Code fires Stop for the main agent
-# only), so a subagent's state always comes straight from its own transcript.
+# guard against. $3 (marker) is the Stop-hook turn marker for the MAIN session only: when its
+# stored uuid (BUG-071: the record it names, never file mtime) matches the main transcript's own
+# newest record uuid, the hook has already confirmed this turn concluded for the newest content,
+# and that verdict is trusted over a transcript-parsed guess — the one case this can matter is an
+# end-of-turn event the tail-bounded parse above has not resolved yet (AC: "judged concluded ...
+# even where a transcript-level end-of-turn event has not yet been parsed"). No such hook exists
+# for a subagent (Claude Code fires Stop for the main agent only), so a subagent's state always
+# comes straight from its own transcript.
 turn_tree_state() {
   local tp=$1 sdir=$2 marker=$3 c f muid tuid
   TURN_ACTIVE=0; TURN_PENDING=0
