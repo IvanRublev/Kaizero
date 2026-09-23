@@ -8,8 +8,10 @@ SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # TASK-066g-marker-overrides-parse — the Stop hook's own turn marker is preferred over a
 # transcript-parsed guess for the main session: the last record in the tail window still reads
 # "pending" (a stale, never-resolved tool call, which on its own would keep the window alive
-# forever — tests/TASK-066-turn-state-watchdog.sh's TW1) but the marker's mtime is at least as new
-# as the transcript's own — the watchdog trusts "concluded" and kills within the window.
+# forever — tests/TASK-066-turn-state-watchdog.sh's TW1) but the marker's CONTENT names the
+# transcript's own newest record uuid (BUG-071: content, never mtime — see
+# BUG-071a-marker-uuid-identity.sh for the mismatched-marker counterpart this scenario now pairs
+# with) — the watchdog trusts "concluded" and kills within the window.
 # Needs real claude: no — a stub claude on a scenario-scoped PATH stands in for it
 # Tools beyond the shared prerequisites: none
 # Folder under $TESTROOT: $TESTROOT/TASK-066g-marker-overrides-parse
@@ -19,9 +21,10 @@ cd "$TW/repo"
 git init -q -b main; git config user.email t@t.t; git config user.name test
 printf -- '- [ ] T1 x\n' > todo.md; git add -A; git commit -qm init
 
-PENDING='{"type":"assistant","message":{"stop_reason":"tool_use"}}'
+PENDING='{"type":"assistant","uuid":"pending-uuid-1","message":{"stop_reason":"tool_use"}}'
 
-# TW7 — stale "pending" content + the marker touched at/after the transcript's own mtime: killed
+# TW7 — stale "pending" content + the marker's content names THIS transcript's own newest record
+# uuid (a genuine Stop-hook confirmation for this exact turn): killed
 cd "$TW/repo"
 cat > "$TW/bin/claude" <<STUB
 #!/usr/bin/env bash
@@ -30,7 +33,7 @@ echo "stub tw7"
 mkdir -p "\$(dirname "\$KAIZERO_SESSION_TRANSCRIPT")"
 printf '%s\n' '$PENDING' >> "\$KAIZERO_SESSION_TRANSCRIPT"
 mf="\${KAIZERO_EXIT_REASON%/*}/turn-concluded-\${KAIZERO_EXIT_REASON##*/claude-exit-reason-}"
-: > "\$mf"
+printf '%s' "pending-uuid-1" > "\$mf"
 sleep 1000
 STUB
 chmod +x "$TW/bin/claude"

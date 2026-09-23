@@ -35,6 +35,7 @@ WAIT_FRAME=1         # seconds per spinner frame on a terminal — one |/-\ revo
 WAIT_STEP=5          # seconds the terminal's elapsed clock advances in — at 1Hz a live clock is noise
 LOG_TICK="${KAIZERO_LOG_TICK:-20}" # seconds between waiting lines when stdout is a log or a pipe, not a terminal
 WATCHDOG_DEFAULT=1m # KAIZERO_WATCHDOG default: how long claude may burn no CPU before it is killed
+QUOTA_RETRY_DEFAULT=15m # KAIZERO_QUOTA_RETRY default: gap between quota-wait retries (BUG-071 mechanism 2)
 WATCHDOG_GRACE="${KAIZERO_WATCHDOG_GRACE:-10}" # seconds the watchdog waits after its SIGTERM before escalating to SIGKILL
 DEPENDENCY_WAIT_DEFAULT=10m # KAIZERO_DEPENDENCY_WAIT default: ceiling on the no-claim wait below
 REVIEW_POLL_DEFAULT=5m      # KAIZERO_REVIEW_POLL default: how often a park syncs the forge
@@ -815,6 +816,16 @@ if [ -z "$WATCHDOG_SECS" ]; then
 fi
 WATCHDOG_PID=""      # set per launch by arm_watchdog, cleared by disarm_watchdog
 
+# BUG-071 mechanism 2: how long between quota-wait retry attempts (well above WATCHDOG_DEFAULT so a
+# quota-limited fleet doesn't itself become restart churn, well below a typical resetsAt gap) — see
+# the quota-wait block near the bottom of this loop, right after a launch's exit is parsed.
+QUOTA_RETRY_SECS="$(parse_dur "${KAIZERO_QUOTA_RETRY:-$QUOTA_RETRY_DEFAULT}" || true)"
+QUOTA_RETRY_RAW="${KAIZERO_QUOTA_RETRY:-$QUOTA_RETRY_DEFAULT}"
+if [ -z "$QUOTA_RETRY_SECS" ]; then
+    echo "$PROG: Ignoring KAIZERO_QUOTA_RETRY=$QUOTA_RETRY_RAW (want 900, 90s, 15m, 1h) — using $QUOTA_RETRY_DEFAULT" >&2
+    QUOTA_RETRY_RAW="$QUOTA_RETRY_DEFAULT"; QUOTA_RETRY_SECS="$(parse_dur "$QUOTA_RETRY_DEFAULT")"
+fi
+
 DEPENDENCY_WAIT_SECS="$(parse_dur "${KAIZERO_DEPENDENCY_WAIT:-$DEPENDENCY_WAIT_DEFAULT}" || true)"
 DEPENDENCY_WAIT_RAW="${KAIZERO_DEPENDENCY_WAIT:-$DEPENDENCY_WAIT_DEFAULT}"
 if [ -z "$DEPENDENCY_WAIT_SECS" ]; then
@@ -1027,6 +1038,35 @@ while true; do
     print_report "$NOW"
     dojo_wisdom
     exit_reason_line "$EXIT_REASON" "$EXIT_DETAIL"
+    # BUG-071 mechanism 2: a quotaLimits-rejected main-session turn — restarting immediately is
+    # certain to be rejected again. Print the API's own message verbatim, then hold the restart
+    # until the next scheduled retry or resetsAt, whichever comes first — never sleeping past
+    # resetsAt, never a flat wait a Ctrl+C/SIGTERM can't interrupt (same `sleep "$X" || true` +
+    # STOP-check idiom the ordinary restart gap already uses below). A missing/unparseable/past
+    # resetsAt falls straight through to that ordinary immediate-restart path instead.
+    if [ "$(turn_record_class "$SESSION_TRANSCRIPT" 2>/dev/null || true)" = quota_limited ]; then
+        QUOTA_MSG="$(newest_record_message_text "$SESSION_TRANSCRIPT" 2>/dev/null || true)"
+        [ -n "$QUOTA_MSG" ] && printf '%s%s\n' "$(icon)" "${C_YELLOW}${QUOTA_MSG}${C_RESET}"
+        QUOTA_RESETS="$(newest_record_resets_at "$SESSION_TRANSCRIPT" 2>/dev/null || true)"
+        QUOTA_NOW=$(date +%s)
+        if [ -n "$QUOTA_RESETS" ] && [ "$QUOTA_RESETS" -gt "$QUOTA_NOW" ]; then
+            QUOTA_WAIT=$(( QUOTA_RESETS - QUOTA_NOW ))
+            [ "$QUOTA_WAIT" -gt "$QUOTA_RETRY_SECS" ] && QUOTA_WAIT=$QUOTA_RETRY_SECS
+            QUOTA_LINE="${C_YELLOW}Usage limit hit $DOT retrying in "
+            QUOTA_LINE="${QUOTA_LINE}${C_BOLD}${C_YELLOW}${QUOTA_WAIT}s${C_RESET}${C_YELLOW} $DOT press "
+            QUOTA_LINE="${QUOTA_LINE}${C_BOLD}${C_YELLOW}Ctrl+C${C_RESET}${C_YELLOW} to stop${C_RESET}"
+            printf '%s%s\n' "$(icon)" "$QUOTA_LINE"
+            # backgrounded on purpose, same as the CLAUDE_WRAPPER_PID wait above: bash defers every
+            # trap until a FOREGROUND child exits, so a signal arriving during a long foreground
+            # `sleep` would never be handled until it finished on its own. `wait` on a background
+            # job IS interruptible.
+            sleep "$QUOTA_WAIT" & QUOTA_SLEEP_PID=$!
+            wait "$QUOTA_SLEEP_PID" 2>/dev/null || true
+            kill "$QUOTA_SLEEP_PID" 2>/dev/null || true
+            if [ "$STOP" = 1 ]; then printf '\n%sRun loop stopped\n' "$(icon_plain)"; break; fi
+            continue
+        fi
+    fi
     # BUG-047: doubles per consecutive flapping pass, capped at 64x, so a flapping origin's
     # sessions thin out instead of relaunching at a flat RESTART_WAIT cadence forever.
     RESTART_GAP=$(( RESTART_WAIT * ( 1 << ( NET_FLAP_STREAK < 6 ? NET_FLAP_STREAK : 6 ) ) ))
@@ -1490,9 +1530,11 @@ SESSION_RECORD_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/claude-ses
 # per-iteration boundary. Same <kind>-<base>-<instance> naming and GC rule as the files above.
 SESSION_LOG_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/session-log-${COORD_BASE//\//-}-$INSTANCE_ID"
 : > "$SESSION_LOG_FILE"
-# TASK-066: touched by the Stop hook on every real firing. Its mtime, compared against the main
-# transcript's own, is the authoritative "the Stop hook already confirmed THIS turn concluded"
-# signal arm_watchdog's turn-state check prefers over a transcript-parsed guess. Same
+# TASK-066: written by the Stop hook on every real firing, with the main transcript's own newest
+# record uuid as its CONTENT (BUG-071: content, never mtime — an mtime-ordering test only held by
+# accident, since neither this path nor SID change together on a relaunch). A content match against
+# the transcript's own newest uuid is the authoritative "the Stop hook already confirmed THIS turn
+# concluded" signal arm_watchdog's turn-state check prefers over a transcript-parsed guess. Same
 # <kind>-<base>-<instance> naming and GC rule as the files above — the hook derives this exact path
 # from KAIZERO_EXIT_REASON at runtime (see its own comment) rather than through a dedicated new
 # KAIZERO_* env var, since the two files already share this directory and naming scheme.
@@ -1548,6 +1590,7 @@ cat >"$STOP_HOOK" <<HOOK_HEAD
 CONTEXT_THRESHOLDS='$CONTEXT_THRESHOLDS'
 CONTEXT_THRESHOLD_DEFAULT=$CONTEXT_THRESHOLD_DEFAULT
 TERMINATOR_SH='$GITDIR_ABS/terminator.sh'
+$(declare -f newest_relevant_line newest_record_uuid)
 HOOK_HEAD
 cat >>"$STOP_HOOK" <<'HOOK_EOF'
 # Stop hook. Fires post-turn (transcript already persisted). Couples to the transcript's
@@ -1577,10 +1620,12 @@ fi
 # no console of its own to speak on, and a session it has no standing to end deserves no trace at all.
 [ -n "${KAIZERO_INSTANCE:-}" ] || exit 0
 # TASK-066: this hook only ever runs when Claude Code's own Stop event fires — i.e. exactly when a
-# turn has genuinely concluded (never between tool calls within a turn). Touch the per-instance
-# turn marker unconditionally, on every branch below, so arm_watchdog can compare its mtime against
-# the transcript's own and trust the hook's verdict over a transcript-parsed guess for the newest
-# content. No new KAIZERO_* env var for this: the marker's path is derived from KAIZERO_EXIT_REASON
+# turn has genuinely concluded (never between tool calls within a turn). Write the per-instance
+# turn marker's content — the transcript's own newest record uuid — unconditionally, on every
+# branch below, so arm_watchdog can compare that uuid against the transcript's own (BUG-071: never
+# mtime — see newest_record_uuid's own comment) and trust the hook's verdict over a
+# transcript-parsed guess for the newest content. No new KAIZERO_* env var for this: the marker's
+# path is derived from KAIZERO_EXIT_REASON
 # (same directory, same <slug>-<instance> suffix, just kaizero.sh's own "turn-concluded-" prefix in
 # place of "claude-exit-reason-" — see STOP_MARKER_FILE's own definition in kaizero.sh). Best-effort:
 # an unwritable marker degrades to the transcript-only reading, never the turn.
@@ -1588,7 +1633,9 @@ mf=""
 if [ -n "${KAIZERO_EXIT_REASON:-}" ]; then
   mf="${KAIZERO_EXIT_REASON%/*}/turn-concluded-${KAIZERO_EXIT_REASON##*/claude-exit-reason-}"
 fi
-[ -n "$mf" ] && { : > "$mf"; } 2>/dev/null
+# BUG-071: content is the transcript's own newest record uuid, not an empty touch — turn_tree_state
+# compares this against the transcript's own newest uuid at judgment time, never mtime.
+[ -n "$mf" ] && { printf '%s' "$(newest_record_uuid "$tp")" > "$mf"; } 2>/dev/null
 # process start-time (via ps): pins identity so a RECYCLED pid isn't mistaken for the same session.
 # Spelled identically in kaizero.sh's own copy and in the emitted zero.sh — see either's comment.
 # BUG 058k: the ONLY thing this hook may signal is the pid named by KAIZERO_SESSION_RECORD — the
@@ -1757,10 +1804,13 @@ find_session_transcript() {
 # record has sat unanswered the whole window" — the latter must decay towards a kill.
 tree_write_signature() {
   local tp=$1 sdir=$2 f
-  printf '%s %s\n' "$(transcript_mtime "$tp")" "$tp"
+  # BUG-071 mechanism 1: each file's own newest assistant|user record uuid, never `stat` mtime — a
+  # write that carries no new assistant/user content (a hook-log/housekeeping record) must not
+  # register as a change, since newest_relevant_line only ever selects an assistant/user line.
+  printf '%s %s\n' "$(newest_record_uuid "$tp" || true)" "$tp"
   [ -d "$sdir" ] || return 0
   while IFS= read -r f; do
-    printf '%s %s\n' "$(transcript_mtime "$f")" "$f"
+    printf '%s %s\n' "$(newest_record_uuid "$f" || true)" "$f"
   done < <(find "$sdir" -type f 2>/dev/null | sort)
 }
 
@@ -1778,10 +1828,25 @@ tree_write_signature() {
 #               user-interrupted turn ("[Request interrupted by user..."), or no relevant record
 #               at all (missing/unreadable file, or nothing written yet) — degrade, never lie: no
 #               positive evidence of a running turn is the safe default.
+# BUG-071: the newest assistant|user record in FILE, tail-bounded to the same 262144 bytes every
+# reader of it below uses. turn_record_class and newest_record_uuid both call this one selector so
+# they structurally agree on what "newest record" means — a naive re-implementation in either one
+# could silently pick a different line (e.g. a trailing Stop-hook `system` record) than the other.
+newest_relevant_line() {
+  [ -f "$1" ] || return 0
+  tail -c 262144 "$1" 2>/dev/null | grep -aE '"type":"(assistant|user)"' | tail -n 1
+}
+
 turn_record_class() {
   local file=$1 line
   [ -f "$file" ] || { printf 'concluded'; return; }
-  line="$(tail -c 262144 "$file" 2>/dev/null | grep -aE '"type":"(assistant|user)"' | tail -n 1)"
+  line="$(newest_relevant_line "$file")"
+  # BUG-071 mechanism 2: a quotaLimits-rejected record answers "concluded" under every case below
+  # too (no further tool call is coming), but restarting immediately is certain to be rejected
+  # again — give it its own verdict so run_loop can hold the restart instead.
+  case "$line" in
+    *'"quotaLimits"'*'"status":"rejected"'*) printf 'quota_limited'; return ;;
+  esac
   case "$line" in
     *'"type":"assistant"'*)
       case "$line" in
@@ -1795,6 +1860,42 @@ turn_record_class() {
       esac ;;
     *) printf 'concluded' ;;
   esac
+}
+
+# BUG-071 mechanism 1: the newest assistant|user record's own `uuid`, empty for a missing file, an
+# unreadable file, or one with no parseable assistant/user record — degrade, never lie, same policy
+# turn_record_class's own default follows. Read from content only, never `stat`: this is what
+# turn_tree_state compares instead of file mtime, and what the Stop hook writes into
+# STOP_MARKER_FILE, so both agree on "this specific turn" by construction rather than by
+# wall-clock accident.
+newest_record_uuid() {
+  local line
+  line="$(newest_relevant_line "$1")"
+  [ -n "$line" ] || return 0
+  printf '%s' "$line" | sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+# BUG-071 mechanism 2: the newest record's own quotaLimits.resetsAt epoch, empty (not an error) for
+# a record with no resetsAt at all — degrade, never lie, same policy as newest_record_uuid.
+newest_record_resets_at() {
+  local line
+  line="$(newest_relevant_line "$1")"
+  [ -n "$line" ] || return 0
+  printf '%s' "$line" | sed -n 's/.*"resetsAt"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p'
+}
+
+# BUG-071 mechanism 2: the newest record's own message text, printed verbatim — never reformatted
+# — so a `resetsAt` epoch's human-readable reset time (already baked into the API's own text) never
+# needs this host's own TZ/DST handling. ponytail: \uXXXX escapes inside the text are left raw
+# rather than decoded — only \" and \\ are unescaped — upgrade to a real JSON-string decode if a
+# captured message ever needs it rendered clean.
+newest_record_message_text() {
+  local line text
+  line="$(newest_relevant_line "$1")"
+  [ -n "$line" ] || return 0
+  text="$(printf '%s' "$line" | sed -n 's/.*"content":\[{"type":"text","text":"\(.*\)"}\].*/\1/p')"
+  [ -n "$text" ] || return 0
+  printf '%s' "$text" | sed 's/\\"/"/g; s/\\\\/\\/g'
 }
 
 # TASK-066: sets globals TURN_ACTIVE (1 if the main session or any subagent, at any depth, is
@@ -1811,10 +1912,17 @@ turn_record_class() {
 # yet been parsed"). No such hook exists for a subagent (Claude Code fires Stop for the main agent
 # only), so a subagent's state always comes straight from its own transcript.
 turn_tree_state() {
-  local tp=$1 sdir=$2 marker=$3 c f mmt tmt
+  local tp=$1 sdir=$2 marker=$3 c f muid tuid
   TURN_ACTIVE=0; TURN_PENDING=0
-  mmt="$(transcript_mtime "$marker")"; tmt="$(transcript_mtime "$tp")"
-  if [ -n "$marker" ] && [ -n "$mmt" ] && [ -n "$tmt" ] && [ "$mmt" -ge "$tmt" ] 2>/dev/null; then
+  # BUG-071: the marker's CONTENT (the Stop hook's newest record's own uuid at the time it fired),
+  # never its mtime — an mtime comparison only holds by accident, since neither the marker path nor
+  # SID change together on a relaunch, so a stale marker from a prior launch can satisfy an
+  # ordering test against a brand-new transcript with no genuine confirmation behind it. A content
+  # match means the hook already confirmed THIS exact transcript record; anything else (empty
+  # marker, empty transcript uuid, or a mismatch) falls through to the transcript-parsed guess.
+  muid="$(cat "$marker" 2>/dev/null || true)"
+  tuid="$(newest_record_uuid "$tp" || true)"
+  if [ -n "$marker" ] && [ -n "$muid" ] && [ -n "$tuid" ] && [ "$muid" = "$tuid" ]; then
     c=concluded
   else
     c="$(turn_record_class "$tp")"
@@ -1901,6 +2009,14 @@ arm_watchdog() {
     while [ "$left" -gt 0 ] && kill -0 "$pid" 2>/dev/null; do
       sleep "$WAIT_TICK"; left=$((left - WAIT_TICK))
       tp="$(find_session_transcript "$sid")"; sdir="${tp%.jsonl}"
+      # BUG-071 mechanism 3: no transcript yet, or one that exists but has no parseable
+      # assistant/user record yet, means startup — genuinely nothing to judge, never "already
+      # concluded". Never decay here: hold the full budget until the first real record lands,
+      # rather than letting turn_record_class's own missing-file default ("concluded") drive it.
+      if [ -z "$(newest_relevant_line "$tp" 2>/dev/null || true)" ]; then
+        left=$WATCHDOG_SECS
+        continue
+      fi
       sig="$(tree_write_signature "$tp" "$sdir")"
       turn_tree_state "$tp" "$sdir" "$marker"
       if [ "$TURN_PENDING" = 1 ] || { [ "$TURN_ACTIVE" = 1 ] && [ "$sig" != "$siglast" ]; }; then
