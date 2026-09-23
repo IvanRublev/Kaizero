@@ -100,5 +100,6 @@
 - [x] BUG-068 `merge_same_repo`'s already-landed detection is an ancestry check that is trivially true the moment it runs, so it cannot tell "code already landed" apart from "nothing was ever committed" tasks/BUG-068.md
 - [x] TASK-069 A commit made outside a kaizero.sh-launched Claude session gets no Kaizero co-author trailer tasks/TASK-069.md
 - [x] TASK-070 `PATFAIL` error line shows a valid-id example when the pattern in effect is the default tasks/TASK-070.md
+- [ ] BUG-071 The Stop-hook turn marker is compared by file mtime across launches, so a restart within the same second as its predecessor's marker write reuses a stale verdict instead of judging the new turn
 - [?] TASK-080 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-081 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
