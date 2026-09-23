@@ -72,7 +72,17 @@ check "AF2 watchdog line" "$(grep -c '❄ Watchdog ·' "$TF/af2.log")" "0"
 # AF3 — regression: transcript flat, session dir flat, and a live descendant whose CPU ticks stay
 # flat is still killed, worded "no progress" not "no CPU progress"
 cd "$TF/repo"
-printf '#!/usr/bin/env bash\n[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }\necho "stub af3"\nsleep 1000 &\nwait\n' > "$TF/bin/claude"
+# BUG-071 mechanism 3: write a real record first, same reason as af2 above — otherwise the
+# watchdog's missing-record grace period never ends and this claude is never killed.
+cat > "$TF/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-}" = "-v" ] && { echo "stub-claude 0.0.0"; exit 0; }
+echo "stub af3"
+mkdir -p "$(dirname "$KAIZERO_SESSION_TRANSCRIPT")"
+printf '%s\n' '{"type":"assistant","uuid":"stub-1","message":{"stop_reason":"end_turn"}}' >> "$KAIZERO_SESSION_TRANSCRIPT"
+sleep 1000 &
+wait
+STUB
 chmod +x "$TF/bin/claude"
 PATH="$TF/bin:$PATH" KAIZERO_WATCHDOG=5 timeout 90 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TF/af3.log" 2>&1
 # the watchdog's kill is a restart, not a failure of the run
@@ -85,15 +95,16 @@ check "AF3 code text present" "$([ "$(grep -c 'no progress for 5s' "$TF/af3.log"
 check "AF3 no CPU wording" "$(grep -c 'no CPU progress' "$TF/af3.log")" "0"
 # AF3 PASS — exit = 0, watchdog line = 1, code text >= 1, no CPU wording = 0.
 
-# AF4 — absence: no new liveness-detection environment variable, and transcript_mtime is still
+# AF4 — absence: no new liveness-detection environment variable, and the transcript is still
 # sampled every tick
 # the three liveness signals still share KAIZERO_WATCHDOG alone — KAIZERO_WATCHDOG_GRACE is a
 # later, separate knob (the SIGTERM→SIGKILL escalation delay, not liveness detection), so it's
 # the one KAIZERO_WATCHDOG_* name this count expects, not a sign the three signals fragmented.
 check "AF4 no new env var" "$(grep -c 'KAIZERO_WATCHDOG_' "$REAL_SCRIPT")" "1"
-# the original signal is not replaced
-check "AF4 mtime kept" "$([ "$(grep -c 'transcript_mtime "\$tp"' "$REAL_SCRIPT")" -ge 1 ] && echo yes || echo no)" "yes"
-# AF4 PASS — no new env var = 0, mtime kept >= 1.
+# the original signal is not replaced — BUG-071 superseded its mechanism (content uuid, not
+# `stat` mtime) the same way BUG 058a once widened it; see newest_record_uuid's own comment.
+check "AF4 mtime kept" "$([ "$(grep -c 'newest_record_uuid "\$tp"' "$REAL_SCRIPT")" -ge 1 ] && echo yes || echo no)" "yes"
+# AF4 PASS — no new env var = 0, sample kept >= 1.
 
 # AF5 — regression: A-001-parallel-zeroing's real false-positive root cause, generalized.
 # arm_watchdog no longer predicts Claude Code's project-directory naming at all — it globs for

@@ -4,6 +4,21 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-09-23
+
+### Added
+
+- When Claude hits its own usage limit, Kaizero now waits and retries automatically at a
+  configurable interval, timed to land right when the limit resets, instead of hammering
+  retries every restart cycle.
+
+### Changed
+
+- Fixed a rare case where Kaizero could mistake an old, already-finished turn for one still
+  in progress right after a restart.
+- The watchdog now waits for Claude to fully start up before it starts timing "no progress" —
+  so a slow start is never mistaken for a hang.
+
 ## [0.1.5] - 2026-09-23
 
 ### Changed
