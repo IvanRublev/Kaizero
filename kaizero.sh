@@ -268,14 +268,14 @@ resolve_forge() {
 decide_origin() {
   local root="$1" origin rc=0
   origin="$(git -C "$root" remote get-url origin 2>/dev/null)" || origin=""
-  [ -n "$origin" ] || { echo "$PROG: No 'origin' remote — landing as a merge/pull request is the default and needs one to hand a Task off to; run with --local-merge to merge locally instead — it merges directly to the current branch with no review step, review the commits it produces afterward"; return 1; }
+  [ -n "$origin" ] || { echo "$PROG: No 'origin' remote — landing as a merge/pull request is the default and needs one to hand a Task off to; run with --local-merge to merge locally instead — it merges directly to the current branch with no review step, review the commits it produces afterward" >&2; return 1; }
   origin_parts "$origin"
   resolve_forge "$ORIGIN_HOST" || rc=$?
   if [ "$rc" = 2 ]; then
-    echo "$PROG: KAIZERO_FORGE='$KAIZERO_FORGE' is not gh or glab — those are the only two forges this mode implements"
+    echo "$PROG: KAIZERO_FORGE='$KAIZERO_FORGE' is not gh or glab — those are the only two forges this mode implements" >&2
     return 1
   fi
-  [ "$rc" = 0 ] || { echo "$PROG: Unsupported forge '${ORIGIN_HOST:-$ORIGIN_REDUCED}' (origin: $ORIGIN_REDUCED$(rewrite_note "$root" "$ORIGIN_REDUCED")) — MR mode only knows github and gitlab; set KAIZERO_FORGE=gh|glab for a self-hosted instance of one, or run with --local-merge to merge locally instead"; return 1; }
+  [ "$rc" = 0 ] || { echo "$PROG: Unsupported forge '${ORIGIN_HOST:-$ORIGIN_REDUCED}' (origin: $ORIGIN_REDUCED$(rewrite_note "$root" "$ORIGIN_REDUCED")) — MR mode only knows github and gitlab; set KAIZERO_FORGE=gh|glab for a self-hosted instance of one, or run with --local-merge to merge locally instead" >&2; return 1; }
   ORIGIN_URL="$ORIGIN_REPO_ARG"
 }
 
@@ -429,13 +429,13 @@ run_doctor() {
     # guard: claude CLI present AND runnable — `command -v` only proves a name resolves on PATH,
     # which a version-manager shim (asdf, etc.) always does regardless of which version it
     # resolves to for this cwd; only invoking it proves the real launch (below) will work here.
-    command -v claude >/dev/null 2>&1 || { echo "$PROG: Claude CLI not found on PATH — install Claude Code: https://claude.com/product/claude-code"; exit 1; }
+    command -v claude >/dev/null 2>&1 || { echo "$PROG: Claude CLI not found on PATH — install Claude Code: https://claude.com/product/claude-code" >&2; exit 1; }
     local claude_v_out
-    claude_v_out=$(claude -v 2>&1) || { echo "$PROG: Claude CLI found on PATH but failed to run — $claude_v_out"; exit 1; }
+    claude_v_out=$(claude -v 2>&1) || { echo "$PROG: Claude CLI found on PATH but failed to run — $claude_v_out" >&2; exit 1; }
 
     # guard: flock prerequisite (see top) — present AND runnable.
-    command -v flock >/dev/null 2>&1 || { echo "$PROG: Flock not found on PATH (Linux: util-linux; macOS: brew install flock)"; exit 1; }
-    flock -n "$(mktemp)" true 2>/dev/null || { echo "$PROG: Flock present but not runnable"; exit 1; }
+    command -v flock >/dev/null 2>&1 || { echo "$PROG: Flock not found on PATH (Linux: util-linux; macOS: brew install flock)" >&2; exit 1; }
+    flock -n "$(mktemp)" true 2>/dev/null || { echo "$PROG: Flock present but not runnable" >&2; exit 1; }
     return 0
   fi
 
@@ -704,17 +704,17 @@ mr_network_and_auth_ok() {
 if [ "${1:-}" = --doctor ]; then
   run_doctor
   if [ "${2:-}" != --local-merge ]; then
-    git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed."; exit 1; }
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed." >&2; exit 1; }
     DOCTOR_BASE="$(git symbolic-ref -q --short HEAD)" \
-        || { echo "$PROG: Detached HEAD in the target repository '$(pwd -P)' — check out the base branch first."; exit 1; }
-    DOCTOR_ROOT="$(wt_root "$(pwd -P)")" || { echo "$PROG: Could not resolve the doctor root"; exit 1; }
+        || { echo "$PROG: Detached HEAD in the target repository '$(pwd -P)' — check out the base branch first." >&2; exit 1; }
+    DOCTOR_ROOT="$(wt_root "$(pwd -P)")" || { echo "$PROG: Could not resolve the doctor root" >&2; exit 1; }
     if is_main_or_bare "$(pwd -P)"; then
-      [ "$(pwd -P)" = "$DOCTOR_ROOT" ] || { echo "$PROG: Not at the main repo root — cd to '$DOCTOR_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)"; exit 1; }
+      [ "$(pwd -P)" = "$DOCTOR_ROOT" ] || { echo "$PROG: Not at the main repo root — cd to '$DOCTOR_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)" >&2; exit 1; }
     else
       if DOCTOR_MAIN="$(main_root_of "$(git rev-parse --path-format=absolute --git-common-dir)")"; then
-        echo "$PROG: Not at the main repo root — cd to '$DOCTOR_MAIN' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)"; exit 1
+        echo "$PROG: Not at the main repo root — cd to '$DOCTOR_MAIN' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)" >&2; exit 1
       else
-        echo "$PROG: Not at the main repo root, and its path could not be determined here — cd to the repository's own working directory (not a linked worktree) first."; exit 1
+        echo "$PROG: Not at the main repo root, and its path could not be determined here — cd to the repository's own working directory (not a linked worktree) first." >&2; exit 1
       fi
     fi
     TARGET_ROOT="$DOCTOR_ROOT"; TARGET_BASE="$DOCTOR_BASE"
@@ -1114,24 +1114,24 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)          usage; exit 0 ;;
     --version)          echo "$VERSION"; exit 0 ;;
-    -t|--taskprompt)    [ $# -ge 2 ] || { echo "$PROG: $1 needs a value"; exit 1; }; TASK_PROMPT="$2"; shift 2 ;;
+    -t|--taskprompt)    [ $# -ge 2 ] || { echo "$PROG: $1 needs a value" >&2; exit 1; }; TASK_PROMPT="$2"; shift 2 ;;
     --taskprompt=*)     TASK_PROMPT="${1#*=}"; shift ;;
     --local-merge)       LOCAL_MERGE=1; shift ;;
     --always-on)         ALWAYS_ON=1; shift ;;
     --no-co-authorship)  KAIZERO_NO_CO_AUTHORSHIP=1; shift ;;
     --)                 shift; while [ $# -gt 0 ]; do ARGS+=("$1"); shift; done ;;
-    -*)                 echo "$PROG: Unknown option: $1"; usage; exit 1 ;;
+    -*)                 echo "$PROG: Unknown option: $1" >&2; usage; exit 1 ;;
     *)                  ARGS+=("$1"); shift ;;
   esac
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}   # guard empty-array expansion under set -u (portable)
 
-[ $# -le 1 ] || { echo "$PROG: Too many positional args; expected at most one todo-file-path"; exit 1; }
+[ $# -le 1 ] || { echo "$PROG: Too many positional args; expected at most one todo-file-path" >&2; exit 1; }
 TODO_ARG="${1:-}"
 
 # guardrail: a real run needs a repository; a parse-level answer (-h, unknown option, too many
 # args) above never reaches here, so it works from anywhere.
-git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed."; exit 1; }
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed." >&2; exit 1; }
 
 # the ONE branch this launch is invoked on — the target's branch (below, TARGET_BASE). Computed
 # AFTER arg parsing (above) so -h/--help exits before this git call — outside a git repo, help
@@ -1238,18 +1238,18 @@ fi
 # branch (not detached) before we start — else refuse and let the human decide. (Clean-tree is
 # checked further below, AFTER the nesting check: an unignored nested coordination repo shows
 # up as an untracked path in `git status`, and the nesting message is the more useful one.)
-[ "$LAUNCH_BASE" != HEAD ] || { echo "$PROG: Detached HEAD in the target repository '$(pwd -P)' — check out the base branch first."; exit 1; }
+[ "$LAUNCH_BASE" != HEAD ] || { echo "$PROG: Detached HEAD in the target repository '$(pwd -P)' — check out the base branch first." >&2; exit 1; }
 # guardrail: claude's Bash calls run from cwd, and the zero prompt + `.git/zero.sh` + Task
 # worktree paths all assume cwd is the target's main worktree root — refuse a subdir launch,
 # and a launch inside a leftover claim worktree, so they never misfire.
-REPO_ROOT="$(wt_root "$(pwd -P)")" || { echo "$PROG: Could not resolve the target repository root"; exit 1; }
+REPO_ROOT="$(wt_root "$(pwd -P)")" || { echo "$PROG: Could not resolve the target repository root" >&2; exit 1; }
 if is_main_or_bare "$(pwd -P)"; then
-  [ "$(pwd -P)" = "$REPO_ROOT" ] || { echo "$PROG: Not at the main repo root — cd to '$REPO_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)"; exit 1; }
+  [ "$(pwd -P)" = "$REPO_ROOT" ] || { echo "$PROG: Not at the main repo root — cd to '$REPO_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)" >&2; exit 1; }
 else
   if REPO_ROOT="$(main_root_of "$(git rev-parse --path-format=absolute --git-common-dir)")"; then
-    echo "$PROG: Not at the main repo root — cd to '$REPO_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)"; exit 1
+    echo "$PROG: Not at the main repo root — cd to '$REPO_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)" >&2; exit 1
   else
-    echo "$PROG: Not at the main repo root, and its path could not be determined here — cd to the repository's own working directory (not a linked worktree) first."; exit 1
+    echo "$PROG: Not at the main repo root, and its path could not be determined here — cd to the repository's own working directory (not a linked worktree) first." >&2; exit 1
   fi
 fi
 TARGET_ROOT="$(pwd -P)"
@@ -1272,8 +1272,8 @@ fi
 # --- todo path resolved: absolute, physical (pwd -P — a logical path never prefix-matches
 # git's physical worktree roots under a symlinked /tmp) --------------------------------
 if [ -n "$TODO_ARG" ]; then TODO_INPUT="$TODO_ARG"; else read -r -p "Path to todo.md file: " TODO_INPUT; fi
-[ -n "$TODO_INPUT" ] || { echo "$PROG: No path entered"; exit 1; }
-[ -f "$TODO_INPUT" ] || { echo "$PROG: File not found: $TODO_INPUT"; exit 1; }
+[ -n "$TODO_INPUT" ] || { echo "$PROG: No path entered" >&2; exit 1; }
+[ -f "$TODO_INPUT" ] || { echo "$PROG: File not found: $TODO_INPUT" >&2; exit 1; }
 TODO_DIR="$(cd "$(dirname "$TODO_INPUT")" && pwd -P)"
 TODO_ABS_INPUT="$TODO_DIR/$(basename "$TODO_INPUT")"
 
@@ -1281,21 +1281,21 @@ TODO_ABS_INPUT="$TODO_DIR/$(basename "$TODO_INPUT")"
 # COORD_ROOT is the todo's own worktree root, via the same discriminator as the target guard
 # above, never git's top-level lookup.
 git -C "$TODO_DIR" rev-parse --git-dir >/dev/null 2>&1 \
-    || { echo "$PROG: '$TODO_INPUT' is not inside a git repository — the Release Todo List's repository is the coordination repository"; exit 1; }
+    || { echo "$PROG: '$TODO_INPUT' is not inside a git repository — the Release Todo List's repository is the coordination repository" >&2; exit 1; }
 TODO_WT="$(wt_root "$TODO_DIR")" \
-    || { echo "$PROG: Could not resolve the coordination repository root"; exit 1; }
+    || { echo "$PROG: Could not resolve the coordination repository root" >&2; exit 1; }
 if is_main_or_bare "$TODO_DIR"; then
     COORD_ROOT="$TODO_WT"
 else
     if COORD_ROOT="$(main_root_of "$(git -C "$TODO_DIR" rev-parse --path-format=absolute --git-common-dir)")"; then
-        echo "$PROG: '$TODO_INPUT' is in the linked worktree '$TODO_WT' — use the main checkout '$COORD_ROOT' instead"; exit 1
+        echo "$PROG: '$TODO_INPUT' is in the linked worktree '$TODO_WT' — use the main checkout '$COORD_ROOT' instead" >&2; exit 1
     else
-        echo "$PROG: '$TODO_INPUT' is in the linked worktree '$TODO_WT' — its repository's main checkout could not be determined here; use the repository's own working directory (not a linked worktree) instead"; exit 1
+        echo "$PROG: '$TODO_INPUT' is in the linked worktree '$TODO_WT' — its repository's main checkout could not be determined here; use the repository's own working directory (not a linked worktree) instead" >&2; exit 1
     fi
 fi
 TODO_PATH="${TODO_ABS_INPUT#"$COORD_ROOT"/}"
 COORD_BASE="$(git -C "$COORD_ROOT" symbolic-ref -q --short HEAD)" \
-    || { echo "$PROG: Detached HEAD in the coordination repository '$COORD_ROOT' — check out its base branch first."; exit 1; }
+    || { echo "$PROG: Detached HEAD in the coordination repository '$COORD_ROOT' — check out its base branch first." >&2; exit 1; }
 
 # --- same-repository detection: compares git common dirs, resolved to absolute physical paths
 CC="$(cd "$COORD_ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
@@ -1307,7 +1307,7 @@ if [ "$CC" = "$TC" ]; then SAME_REPO=1; else SAME_REPO=0; fi
 # default, this fires for any same-repository launch whose origin qualifies, so --local-merge is
 # what keeps that layout running at all.
 if [ "$MR_MODE" = 1 ] && [ "$SAME_REPO" = 1 ]; then
-    echo "$PROG: MR mode needs a separate coordination repository — '$TODO_ABS_INPUT' is inside the target '$TARGET_ROOT'; a merge request has nowhere to go from the repository that also holds the Release Todo List — run with --local-merge to merge locally instead"
+    echo "$PROG: MR mode needs a separate coordination repository — '$TODO_ABS_INPUT' is inside the target '$TARGET_ROOT'; a merge request has nowhere to go from the repository that also holds the Release Todo List — run with --local-merge to merge locally instead" >&2
     exit 1
 fi
 
@@ -1330,7 +1330,7 @@ if [ "$TARGET_ROOT" != "$COORD_ROOT" ]; then
         REL="${INNER#"$OUTER"/}"
         if ! git -C "$OUTER" check-ignore -q "$REL" \
              && ! git -C "$OUTER" ls-files --stage -- "$REL" 2>/dev/null | grep -q '^160000'; then
-            echo "$PROG: '$INNER' lives inside '$OUTER' but is neither ignored nor a submodule there — add '$REL/' to $OUTER/.gitignore or .git/info/exclude"
+            echo "$PROG: '$INNER' lives inside '$OUTER' but is neither ignored nor a submodule there — add '$REL/' to $OUTER/.gitignore or .git/info/exclude" >&2
             exit 1
         fi
     fi
@@ -1344,7 +1344,7 @@ if [ "$MR_MODE" = 1 ]; then TB="refs/remotes/origin/$TARGET_BASE"; else TB="refs
 
 # --- clean-tree guards: target's own (today's, kept) and coordination's (new) ----------
 [ -z "$(git status --porcelain)" ] \
-    || { echo "$PROG: Working tree on '$TARGET_BASE' is dirty — commit or stash first."; git status --short; exit 1; }
+    || { echo "$PROG: Working tree on '$TARGET_BASE' is dirty — commit or stash first." >&2; git status --short; exit 1; }
 if [ -n "$(git -C "$COORD_ROOT" status --porcelain)" ]; then
     # BUG-058h: a crashed agent's own uncommitted edit (a Task file tick, or a todo.md tick
     # never reaching commit_ac_checkoff before the process died) must not block every later
@@ -1371,7 +1371,7 @@ if [ -n "$(git -C "$COORD_ROOT" status --porcelain)" ]; then
         done
     fi
     if [ -n "$CG_LIVE_PID" ]; then
-        echo "$PROG: Working tree on '$COORD_ROOT@$COORD_BASE' — session $CG_LIVE_PID is still live and mid-commit on its Task; retry the launch shortly."
+        echo "$PROG: Working tree on '$COORD_ROOT@$COORD_BASE' — session $CG_LIVE_PID is still live and mid-commit on its Task; retry the launch shortly." >&2
         exit 1
     elif [ -n "$CG_DEAD_PID" ]; then
         while IFS= read -r CG_LINE; do
@@ -1383,7 +1383,7 @@ if [ -n "$(git -C "$COORD_ROOT" status --porcelain)" ]; then
             esac
         done < <(git -C "$COORD_ROOT" status --porcelain)
     else
-        echo "$PROG: Working tree on '$COORD_ROOT@$COORD_BASE' is dirty — commit or stash first."; git -C "$COORD_ROOT" status --short; exit 1
+        echo "$PROG: Working tree on '$COORD_ROOT@$COORD_BASE' is dirty — commit or stash first." >&2; git -C "$COORD_ROOT" status --short; exit 1
     fi
 fi
 # guardrail: the merge gate diffs the Release Todo List against the branch's fork point on the
@@ -1391,7 +1391,7 @@ fi
 # dirty-tree guard above misses a gitignored file) makes EVERY merge refuse "newly checks 0
 # boxes" and nothing can ever land.
 git -C "$COORD_ROOT" cat-file -e "$COORD_BASE:$TODO_PATH" 2>/dev/null \
-    || { echo "$PROG: '$TODO_PATH' is not tracked on '$COORD_BASE' in '$COORD_ROOT' — commit it there first, else every merge is refused and no Task can land."; exit 1; }
+    || { echo "$PROG: '$TODO_PATH' is not tracked on '$COORD_BASE' in '$COORD_ROOT' — commit it there first, else every merge is refused and no Task can land." >&2; exit 1; }
 
 # refuse a --local-merge launch over a Release Todo List that still carries open `[↑]` requests
 # — those boxes only exist because an earlier launch ran in MR mode; merging locally now would
@@ -1399,7 +1399,7 @@ git -C "$COORD_ROOT" cat-file -e "$COORD_BASE:$TODO_PATH" 2>/dev/null \
 if [ "$MR_MODE" = 0 ]; then
     OPEN_REQS="$(open_requests)"
     [ "$OPEN_REQS" -eq 0 ] \
-        || { echo "$PROG: '$TODO_PATH' has $OPEN_REQS task(s) marked '[↑]' (open merge/pull requests) — drop --local-merge to keep driving them, or clear those boxes by hand; a local merge would land them instead of syncing their review"; exit 1; }
+        || { echo "$PROG: '$TODO_PATH' has $OPEN_REQS task(s) marked '[↑]' (open merge/pull requests) — drop --local-merge to keep driving them, or clear those boxes by hand; a local merge would land them instead of syncing their review" >&2; exit 1; }
 fi
 
 # MR mode: FORGE and ORIGIN_URL already came from the origin/forge decision at the top of this
