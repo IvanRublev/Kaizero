@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run a kaizero command N times in the current folder, each instance in its own tiled tmux pane.
-# Usage: kz-tmux.sh [-v|-vv|-vvv] <num-terminals> <kaizero-command...>
+# Usage: kz-tmux.sh [-v|-vv|-vvv] [-t <wait_sec>] <num-terminals> <kaizero-command...>
 #
 # Pass a verbose flag -vvv to have tmux write its own debug logs under
 # ${XDG_STATE_HOME:-$HOME/.local/state}/kz-tmux; by default no logs are written.
@@ -21,12 +21,22 @@ set -euo pipefail
 VERSION="0.0.1"
 echo "kz-tmux.sh v$VERSION"
 
-USAGE="usage: kz-tmux.sh [-v|-vv|-vvv] <num-terminals> <kaizero-command...>"
+USAGE="usage: kz-tmux.sh [-v|-vv|-vvv] [-t <wait_sec>] <num-terminals> <kaizero-command...> (wait_sec: 0-900, default of 3)"
 
 VERBOSE=()
 if [ "$#" -ge 1 ] && [[ "$1" =~ ^-v+$ ]]; then
   VERBOSE=("$1")
   shift
+fi
+
+WAIT_SEC=3
+if [ "$#" -ge 1 ] && [ "$1" = "-t" ]; then
+  if [ "$#" -lt 2 ] || ! [[ "$2" =~ ^[0-9]+$ ]] || [ "$2" -gt 900 ]; then
+    echo "$USAGE" >&2
+    exit 1
+  fi
+  WAIT_SEC="$2"
+  shift 2
 fi
 
 if [ "$#" -lt 2 ]; then
@@ -50,22 +60,34 @@ if [ "${#VERBOSE[@]}" -gt 0 ]; then
   mkdir -p "$LOG_DIR"
 fi
 
+STOP_ALL_STATUS='#[fg=green]Ctrl-b Ctrl-c: sends stop signal to all panes (Ctrl-c is repeatable within 5s)#[default]'
+
 (cd "$LOG_DIR" && tmux "${VERBOSE[@]}" new-session -d -s "$SESSION" -n "kz" -c "$ORIG_PWD" "$CMD" \; \
   set-option -t "$SESSION" mouse on \; \
   set-option -t "$SESSION" repeat-time 5000 \; \
   set-window-option -t "$SESSION" remain-on-exit on \; \
   set-option -t "$SESSION" status-right-length 90 \; \
-  set-option -t "$SESSION" status-right '#[fg=green]Ctrl-b Ctrl-c: sends stop signal to all panes (Ctrl-c is repeatable within 5s)#[default]' \; \
+  set-option -t "$SESSION" status-right "$STOP_ALL_STATUS" \; \
   bind-key -r C-c run-shell 'tmux list-panes -t "$(tmux display-message -p "#{session_name}")" -F "##{pane_id}" | xargs -I{} tmux send-keys -t {} C-c')
 
 if [ -z "${SSH_CONNECTION:-}" ]; then
   tmux set-hook -t "$SESSION" client-detached "kill-session -t $SESSION"
 fi
+launched=1
 i=2
 while [ "$i" -le "$COUNT" ]; do
   tmux split-window -t "$SESSION" "$CMD"
   tmux select-layout -t "$SESSION" tiled
+  launched=$((launched + 1))
   i=$((i + 1))
+  # pause after every 2nd pane (batch size 2), until the last batch has opened
+  if [ "$WAIT_SEC" -gt 0 ] && [ $((launched % 2)) -eq 0 ] && [ "$launched" -lt "$COUNT" ]; then
+    tmux set-option -t "$SESSION" status-right "#[fg=grey]Launching $launched of $COUNT instances...#[default]"
+    sleep "$WAIT_SEC"
+  fi
 done
+if [ "$WAIT_SEC" -gt 0 ]; then
+  tmux set-option -t "$SESSION" status-right "$STOP_ALL_STATUS"
+fi
 
 (cd "$LOG_DIR" && tmux "${VERBOSE[@]}" attach -t "$SESSION")
