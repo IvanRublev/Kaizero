@@ -149,13 +149,13 @@ Supported on **macOS and Linux** (the script is bash-3.2-safe, so stock macOS `b
    brew install gh jq          # github.com / GitHub Enterprise
    brew install glab jq        # gitlab.com / self-hosted GitLab
    ```
-3. **tmux** — needed only to run several agents at once with `kz-tmux`, tiled into parallel
+3. **tmux** — needed to run several agents at once with `kz-tmux`, tiled into parallel
    terminal windows.
    ```sh
    brew install tmux           # macOS; Linux ships it in most package managers
    ```
 
-These prerequisites are guard-checked at startup (the forge's only when the run lands requests); the script exits with a clear message if it is missing — including a renamed or dropped `gh`/`glab` flag, caught before a launch, not only in CI.
+These prerequisites are guard-checked at startup (the forge's only when the run lands requests, tmux is not checked); the script exits with a clear message if it is missing — including a renamed or dropped `gh`/`glab` flag, caught before a launch, not only in CI.
 
 **Transcript-schema contract.** Kaizero couples to one thing in Claude Code internals: the session transcript's `message.usage` schema. Kaizero's own Stop hook records each session's `transcript_path` (a field of the hook payload), and reads it twice, for two different readers. The **context-rot guard** (below) reads the newest usage record on every turn to decide whether to restart. The **token report**, after `claude` exits, reads the whole transcript and sums the `message.usage` fields of every assistant line: `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` — the four categories Anthropic bills separately. One API request is written as several transcript lines, one per content block, each repeating the same `usage` object verbatim, so the token report **dedupes by the line's `requestId`** — a rule that belongs to the token report alone, since the context-rot guard keeps only the latest record regardless of request. Both readers take only the first (parent) match of each field name on a line: `usage.iterations[]` repeats all four names one level down, and `usage.cache_creation` carries the `ephemeral_5m`/`ephemeral_1h` leaves that already sum into the parent.
 
