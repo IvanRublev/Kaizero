@@ -47,19 +47,26 @@ Runs [`claude`](https://claude.com/product/claude-code) on a predefined prompt i
 ```
 sudo curl -fsSL https://raw.githubusercontent.com/IvanRublev/kaizero/refs/heads/master/kaizero.sh -o /usr/local/bin/kaizero
 sudo chmod +x /usr/local/bin/kaizero
+sudo curl -fsSL https://raw.githubusercontent.com/IvanRublev/kaizero/refs/heads/master/kz-tmux.sh -o /usr/local/bin/kz-tmux
+sudo chmod +x /usr/local/bin/kz-tmux
 ```
 
 Make sure that your Todo List file is committed in the git repository which is separate from you codebase one.
 Make sure the working tree of both repositories are in a clean state (commit or stash any changes).
 
-Then run `kaizero` pointing to your Todo List, picking the mode by how the work gets reviewed:
+Then run `kaizero` pointing to your Todo List to work through it with one agent, picking the mode by how the work gets reviewed:
 
 ```sh
 kaizero todo.md                 # team merge (pull) requests review
 kaizero --local-merge todo.md   # commit review
 ```
 
-You can run either command in multiple parallel terminals to work through the Tasks faster.
+To work through the Tasks faster with several agents at once, pass `kz-tmux` the agent count, then the
+full `kaizero` command to run in each — it tiles them into one tmux session:
+
+```sh
+kz-tmux 6 kaizero todo.md
+```
 
 > ⚠️ Kaizero runs `claude` **unattended with permissions auto-approved** and **commits on its own** to the branch you launch it on. Only ever point it at a Todo List you wrote or reviewed, on a branch with a clean, committed tree — git is your only undo.
 
@@ -141,6 +148,11 @@ Supported on **macOS and Linux** (the script is bash-3.2-safe, so stock macOS `b
    ```sh
    brew install gh jq          # github.com / GitHub Enterprise
    brew install glab jq        # gitlab.com / self-hosted GitLab
+   ```
+3. **tmux** — needed only to run several agents at once with `kz-tmux`, tiled into parallel
+   terminal windows.
+   ```sh
+   brew install tmux           # macOS; Linux ships it in most package managers
    ```
 
 These prerequisites are guard-checked at startup (the forge's only when the run lands requests); the script exits with a clear message if it is missing — including a renamed or dropped `gh`/`glab` flag, caught before a launch, not only in CI.
