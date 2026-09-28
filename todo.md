@@ -103,5 +103,6 @@
 - [x] BUG-071 The Stop-hook turn marker is compared by file mtime across launches, so a restart within the same second as its predecessor's marker write reuses a stale verdict instead of judging the new turn
 - [ ] BUG-072 Timestamps in evidence lines and gate notes are guessed by claude instead of taken from the clock tasks/BUG-072.md
 - [ ] BUG-073 Most of kaizero's own error messages print to stdout instead of stderr tasks/BUG-073.md
+- [ ] BUG-074 `kaizero.sh` exits silently on startup when the terminal's terminfo entry omits the `dim` capability tasks/BUG-074.md
 - [?] TASK-080 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-081 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
