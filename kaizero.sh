@@ -6245,6 +6245,7 @@ Keep these facts in mind:
       criterion, add one evidence line explaining why the criterion is satisfied:
       > YYYY-MM-DD HH:MM±HHMM <short evidence>
       and commit that checkoff: `@@ZERO_SH@@ commit_ac_checkoff task_id`.
+      Take every timestamp from the shell clock: run `date "+%Y-%m-%d %H:%M%z"` in the same Bash call that writes the line, and run it again each time you rewrite a note.
       ACCEPTANCE CRITERIA GATE — hand your diff to a subagent that answers two questions separately:
       (1) is every Acceptance Criterion ticked? (2) is every ticked criterion has evidence line and
       really passing (don't run tests, static code analysis only)?
@@ -6443,6 +6444,7 @@ Keep these facts in mind:
       criterion, add one evidence line explaining why the criterion is satisfied:
       > YYYY-MM-DD HH:MM±HHMM <short evidence>
       and commit that checkoff: `@@ZERO_SH@@ commit_ac_checkoff task_id`.
+      Take every timestamp from the shell clock: run `date "+%Y-%m-%d %H:%M%z"` in the same Bash call that writes the line, and run it again each time you rewrite a note.
       ACCEPTANCE CRITERIA GATE — hand your diff to a subagent that answers two questions separately:
       (1) is every Acceptance Criterion ticked? (2) is every ticked criterion has evidence line and
       really passing (don't run tests, static code analysis only)?
