@@ -1151,8 +1151,10 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   unset _kz_colors _kz_utf8
 fi
 if [ "$COLOR_CAPABLE" = 1 ]; then
-  C_DIM="$(tput dim)"; C_BOLD="$(tput bold)"; C_CYAN="$(tput setaf 6)"; C_GREEN="$(tput setaf 2)"
-  C_YELLOW="$(tput setaf 3)"; C_RED="$(tput setaf 1)"; C_WHITE="$(tput setaf 7)"; C_RESET="$(tput sgr0)"
+  C_DIM="$(tput dim 2>/dev/null || true)"; C_BOLD="$(tput bold 2>/dev/null || true)"
+  C_CYAN="$(tput setaf 6 2>/dev/null || true)"; C_GREEN="$(tput setaf 2 2>/dev/null || true)"
+  C_YELLOW="$(tput setaf 3 2>/dev/null || true)"; C_RED="$(tput setaf 1 2>/dev/null || true)"
+  C_WHITE="$(tput setaf 7 2>/dev/null || true)"; C_RESET="$(tput sgr0 2>/dev/null || true)"
   C_BWHITE=$'\033[38;2;255;255;255m'; C_BLUE=$'\033[38;2;74;201;243m'; C_GOLD=$'\033[38;2;217;158;64m'
   BOX_TL='╭'; BOX_TR='╮'; BOX_BL='╰'; BOX_BR='╯'; BOX_H='─'; BOX_V='│'; ARROW='→'; DOT='·'; SNOW='❄'
 else
