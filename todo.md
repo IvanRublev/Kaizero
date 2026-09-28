@@ -102,7 +102,7 @@
 - [x] TASK-070 `PATFAIL` error line shows a valid-id example when the pattern in effect is the default tasks/TASK-070.md
 - [x] BUG-071 The Stop-hook turn marker is compared by file mtime across launches, so a restart within the same second as its predecessor's marker write reuses a stale verdict instead of judging the new turn
 - [ ] BUG-072 Timestamps in evidence lines and gate notes are guessed by claude instead of taken from the clock tasks/BUG-072.md
-- [ ] BUG-073 Most of kaizero's own error messages print to stdout instead of stderr tasks/BUG-073.md
+- [x] BUG-073 Most of kaizero's own error messages print to stdout instead of stderr tasks/BUG-073.md
 - [x] BUG-074 `kaizero.sh` exits silently on startup when the terminal's terminfo entry omits the `dim` capability tasks/BUG-074.md
 - [ ] ISSUE-075 `kz-tmux.sh` runs several `kaizero` instances at once, each in its own tiled tmux pane, alongside `kaizero.sh` tasks/ISSUE-075.md
 - [?] TASK-080 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
