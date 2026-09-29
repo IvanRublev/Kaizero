@@ -486,7 +486,7 @@ ok "timeout present and runnable"
 # predicate — one is spelled differently on the two platforms and the other is missing from macOS —
 # so this proves the single code path behaves the same on both.
 sigdir="$tmp/sig"; mkdir -p "$sigdir"
-: > "$sigdir/A.md"; : > "$sigdir/B.md"; stampf="$tmp/sig-stamp"; : > "$stampf"
+: > "$sigdir/A.md"; : > "$sigdir/B.md"; stampf="$tmp/sig-written"; : > "$stampf"
 sleep 1                                        # one whole second separates everything written above
 cache="$tmp/sig-cache"; : > "$cache"
 # 22a. `test -nt` against the cache file's own timestamp, in the direction the cache reads it: the
@@ -495,13 +495,13 @@ cache="$tmp/sig-cache"; : > "$cache"
 sleep 1; : > "$sigdir/A.md"                    # content edit, same name, same inode
 [ "$cache" -nt "$sigdir/A.md" ] && fail "test -nt still called the cache file newer than a candidate touched after it"
 ok "test -nt: the cache file outranks a candidate written before it, and not one touched after it"
-# 22b. `touch -r REF FILE` — the cache file is stamped with the moment the walk STARTED, not the
-# moment it ended, so a Task file edited while the walk was running still reads as newer than it.
-: > "$sigdir/B.md"                              # a candidate edited after the stamp was taken
-fresh="$tmp/sig-fresh"; : > "$fresh"
-touch -r "$stampf" "$fresh" || fail "touch -r REF FILE failed"
-[ "$sigdir/B.md" -nt "$fresh" ] || fail "touch -r did not carry the reference file's older timestamp onto the new one"
-ok "touch -r REF FILE carries a start-of-walk timestamp onto the cache file"
+# 22b. `mv` inside one directory — the cache file is written before the walk and only renamed into
+# place after it, so the stored verdict must come out carrying the mtime it was written with, not
+# the moment of the rename. A Task file edited while the walk ran then still reads as newer than it.
+mv "$stampf" "$tmp/sig-published" || fail "mv within one directory failed"
+: > "$sigdir/B.md"                              # a candidate edited while the "walk" was running
+[ "$sigdir/B.md" -nt "$tmp/sig-published" ] || fail "mv carried the rename's own time onto the file instead of preserving its mtime"
+ok "mv preserves the mtime a verdict was written with, so a mid-walk edit still outranks it"
 # 22c. the sorted-filename digest: `LC_ALL=C sort | cksum`, the half that catches an added,
 # removed or renamed candidate — a rename leaves both the timestamp and the file count alone.
 # enumerated exactly as candidate_paths does it — `find -type f -not -path '*/.git/*' \( -iname

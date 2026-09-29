@@ -62,7 +62,7 @@ check "I77-1 cache file is not a candidate" "$(find "$D" -type f -not -path '*/.
 # walked one, and the cache file lives where the candidate search cannot see it.
 
 # I77-2 — every filesystem change to the candidate set invalidates it
-# first with no delay at all: bash 3.2 compares whole seconds, so an edit landing inside the stamp's
+# first with no delay at all: bash 3.2 compares whole seconds, so an edit landing inside the stored verdict's
 # own second is exactly the case a loose comparison would accept forever
 printf -- 'no acceptance criteria heading\n' > tasks/TASK-3.md
 vt e0; check "I77-2 same-second edit walks" "$(walked e0)" "yes"
@@ -135,15 +135,19 @@ printf 'garbage\n' > "$C"; vt x3; check "I77-5 corrupt cache walks"  "$(walked x
 chmod 000 "$C";          vt x4; check "I77-5 unreadable cache walks" "$(walked x4)" "yes"; check "I77-5 unreadable cache verdict" "$RC" "0"
 chmod 644 "$C" 2>/dev/null || true
 # a coordination git directory this run cannot write to costs the cache, never the verdict: no
-# stamp, no stored verdict, and not a byte on either captured stream
+# temp verdict written, nothing stored, and not a byte on either captured stream
 sleep 1; touch tasks/TASK-1.md            # force a miss, so the run really has a walk to store
+sleep 1                                   # …and so a verdict it DID store would outrank that file,
+                                          # which is what makes x6's walk below mean "stored nothing"
 chmod a-w "$D/.git"; vt x5; chmod u+w "$D/.git"
 check "I77-5 unwritable git dir walks"        "$(walked x5)" "yes"
 check "I77-5 unwritable git dir verdict"      "$RC" "0"
 check "I77-5 unwritable git dir stays silent" "$(wc -c < "$TR/x5.out" | tr -d ' ')" "0"
-check "I77-5 no stamp left behind"            "$(ls "$D/.git/" | grep -c '^task-defs-stamp-')" "0"
-# nothing was stored either — the next run walks again rather than trusting a verdict no stamp dated
+check "I77-5 no temp verdict left behind"     "$(ls "$D/.git/" | grep -c '^task-defs-ok-.*\.tmp\.')" "0"
+# nothing was stored either — the next run walks again rather than trusting a verdict this one never published
 vt x6; check "I77-5 unwritable git dir stored nothing" "$(walked x6)" "yes"
+check "I77-5 every damaged shape stays silent" \
+  "$(cat "$TR/x1.out" "$TR/x2.out" "$TR/x3.out" "$TR/x4.out" | wc -c | tr -d ' ')" "0"
 # I77-5 PASS — each damaged-cache shape produces one walk and the correct verdict, never a failed run.
 
 # I77-6 — a gitignored Task directory still resolves, and an edit inside it still invalidates
@@ -185,7 +189,7 @@ newrepo c8 160
 bar(){
   local tag=$1 color=$2
   KAIZERO_COLOR="$color" python3 -c 'import pty,sys; raise SystemExit(pty.spawn(["bash","-c",sys.argv[1]]))' \
-    "cd '$D' && '$B3' '$ZERO' validate-tasks 4>&1 >/dev/null 2>/dev/null" < /dev/null > "$TR/$tag.raw" 2>/dev/null
+    "cd '$D' && '$B3' '$ZERO' validate-tasks 4>&1 >'$TR/$tag.out' 2>&1" < /dev/null > "$TR/$tag.raw" 2>/dev/null
   python3 "$TR/barstats.py" "$TR/$tag.raw" > "$TR/$tag.stats"
 }
 # barstats — one `key=value` line per property of a captured bar rendering, so each check below
@@ -230,6 +234,12 @@ check "I77-8 no elapsed or remaining time" "$(st clock b1)" "0"
 check "I77-8 the whole line fits 80 columns" "$([ "$(st width b1)" -le 80 ] && echo yes || echo NO)" "yes"
 check "I77-8 closing frame names the true total" "$(st final b1)" "1"
 check "I77-8 the line is erased after it" "$(st erase b1)" "1"
+# the bar went to the terminal and nowhere else: what the run's own streams were redirected to is
+# empty, exactly as in plain-line mode
+check "I77-8 the redirected streams got no progress" "$(wc -c < "$TR/b1.out" | tr -d ' ')" "0"
+# and a reused verdict draws nothing here either — a run that skips the walk has no walk to report
+bar b1hit 1
+check "I77-8 a reused verdict draws no frames" "$(wc -c < "$TR/b1hit.raw" | tr -d ' ')" "0"
 # I77-8 PASS — one line carrying label, a 30-cell single-glyph bar and a latched count, redrawn per
 # fill position, closed on the true total and erased.
 
@@ -260,7 +270,7 @@ done
 # I77-10 PASS — below the threshold a bar would appear and clear inside a frame or two, so neither
 # an opening frame nor a closing one is drawn.
 
-# I77-12 — the stored verdict is stamped with the moment the walk STARTED, not the moment it ended,
+# I77-12 — the stored verdict carries the moment the walk STARTED, not the moment it ended,
 # so a Task file edited while a multi-second walk was running is still newer than it
 newrepo c12 160
 MT=(stat -c %Y); stat -c %Y . >/dev/null 2>&1 || MT=(stat -f %m)
@@ -268,11 +278,12 @@ T0=$(date +%s); vt s1; T1=$(date +%s)
 CS="$D/.git/$(ls "$D/.git/" | grep '^task-defs-ok-')"
 CM=$("${MT[@]}" "$CS")
 check "I77-12 the walk really took several seconds" "$([ $(( T1 - T0 )) -ge 3 ] && echo yes || echo NO)" "yes"
-# stamped before the candidate files were read, so the whole reading window is still "newer"
-check "I77-12 the cache is stamped before the walk ended" "$([ $(( T1 - CM )) -ge 2 ] && echo yes || echo NO)" "yes"
-# a file touched at any point after that stamp — which includes the whole walk — invalidates
+# written before the candidate files were read, so the whole reading window is still "newer"
+check "I77-12 the stored verdict predates the walk's end" "$([ $(( T1 - CM )) -ge 2 ] && echo yes || echo NO)" "yes"
+# a file touched at any point after that moment — which includes the whole walk — invalidates
 touch tasks/TASK-77.md
 vt s2; check "I77-12 a file touched mid-walk would invalidate" "$(walked s2)" "yes"
+sleep 1          # so s2's own stored verdict is strictly newer than that file and s3 can reuse it
 # and the reused verdict is measurably cheaper than the walk it replaces, not merely equal
 T2=$(date +%s); vt s3; T3=$(date +%s)
 check "I77-12 the reused verdict skipped the walk"  "$(walked s3)" "no"
@@ -280,7 +291,8 @@ check "I77-12 the reused verdict skipped the walk"  "$(walked s3)" "no"
 # can truncate to the same value when the difference is small
 check "I77-12 and came back faster than the walk"   "$([ $(( (T3 - T2) + 2 )) -le $(( T1 - T0 )) ] && echo yes || echo NO)" "yes"
 # I77-12 PASS — the invalidation window closes at the walk's first read, not at its last, so a peer
-# editing a Task file while this instance walks can never be cached over.
+# editing a Task file while this instance walks can never be cached over, and the reuse it enables
+# is measurably shorter than the walk it replaces.
 
 # I77-11 — the restart cadence and the network-flap backoff that multiplies it
 check "I77-11 default restart wait is 2 seconds" \

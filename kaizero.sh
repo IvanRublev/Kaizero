@@ -6094,13 +6094,13 @@ PROG_LABEL='Validating task definitions'
 # separate question, answered by kaizero.sh's own gate (KAIZERO_COLOR) and governing styling only,
 # so NO_COLOR or a non-UTF-8 locale still gets a bar, in ASCII, rather than a demotion to lines.
 prog_start() {
-  PROG_TOTAL=$1; PROG_N=0; PROG_COUNT=0; PROG_BUCKET=-1; PROG_CELL=-1; PROG_DRAWN=0; PROG_STEP=25
+  PROG_TOTAL=$1; PROG_N=0; PROG_COUNT=0; PROG_BUCKET=-1; PROG_CELL=-1; PROG_DRAWN=0; PROG_STEP=0
   PROG_T0=$2                               # whole seconds: the finest interval bash 3.2 and both
                                            # platforms' `date` can portably agree on, read from the
                                            # shell's own clock so the threshold costs no fork per id
   PROG_MODE=off
   if { : >&4; } 2>/dev/null; then
-    if [ -t 4 ]; then PROG_MODE=bar; PROG_STEP=12; else PROG_MODE=plain; fi
+    if [ -t 4 ]; then PROG_MODE=bar; PROG_STEP=12; else PROG_MODE=plain; PROG_STEP=25; fi
   fi
   if [ "${KAIZERO_COLOR:-0}" = 1 ]; then
     PROG_FILL='─'; PROG_SNOW='❄ '; PROG_ON=$'\033[38;2;74;201;243m'; PROG_OFF=$'\033[2m'; PROG_RESET=$'\033[0m'
@@ -6179,7 +6179,10 @@ prog_end() {
 # untouched, so timestamps alone are blind to it), plus the unchecked ids the walk was asked about —
 # git-derived by construction, since they come off COORD_BASE's own Todo List, so a peer's
 # uncommitted edit to its copy is not a change to the list this fleet coordinates on. Content edits
-# are caught separately, by `test -nt` against the cache file's own mtime: one code path on both
+# are caught separately, by `test -nt` against the cache file's own mtime — which leaves one gap the
+# digest cannot close: a restore that puts an older file back with its old mtime intact (`cp -p`,
+# `tar -x`, `rsync -a`) changes neither half. `git checkout` bumps the mtime, so the common case is
+# caught. It is one code path on both
 # platforms, needing neither `stat`'s format flags nor `find`'s printing predicate. The file lives
 # in the coordination git directory — untracked, and excluded from candidate_paths' own `find`, so
 # writing it can never invalidate the verdict it just stored.
@@ -6196,30 +6199,12 @@ task_cache_file() {
 # validate_ids already follows — a run with findings proves nothing about a later one, so a backlog
 # with an unfixed finding walks (and reports progress) every time until it is fixed.
 validate_tasks() {
-  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile stamp started sig p hit=0
+  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile tmp started sig p hit=0
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
   if [ "${#ids[@]}" -gt 0 ]; then
     cachefile=$(task_cache_file)
-    # the moment this run's view of the filesystem begins, captured BEFORE the candidate set is
-    # enumerated. The cache file is stamped with it rather than with the moment the walk finished,
-    # so an edit landing mid-walk — the walk is seconds long, and a peer may be editing throughout
-    # — is newer than the stored verdict and invalidates it, instead of hiding behind it forever.
-    # Its own name stays out of the cache's namespace so a leftover never reads as a stored verdict,
-    # and the trap clears it when the script exits — including the abort a failed write would cause.
-    # INT and TERM keep their default action, which this script has always relied on, so a hard
-    # interrupt mid-walk can still leave one zero-byte stamp behind.
-    # A git directory this run cannot write to costs the cache, never the verdict: no stamp means
-    # this walk simply stores nothing.
     started=$SECONDS                       # the step's own start, before its first file search —
                                            # the display's threshold is measured from here
-    stamp="$COORD_GITDIR/task-defs-stamp-$$"
-    : 2>/dev/null > "$stamp" || stamp=''   # 2> comes first: redirections apply left to right, and
-                                          # a failing one reports on whatever stderr is by then
-    # the path is baked into the trap body rather than read back from $stamp when it fires: that is
-    # a local, and a trap running after the function has returned would find it unset — which under
-    # `set -u` aborts the trap itself, onto the very stderr the callers capture as findings.
-    # shellcheck disable=SC2064  # expanding now is the point: see the note above
-    [ -n "$stamp" ] && trap "rm -f $(printf '%q' "$stamp") $(printf '%q' "$cachefile.tmp.$$") 2>/dev/null || true" EXIT
     while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
     sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e\n'; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
     # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
@@ -6235,6 +6220,22 @@ validate_tasks() {
       done
     fi
     if [ "$hit" = 0 ]; then
+      # the verdict is written now, BEFORE the walk reads a single Task file, and only renamed into
+      # place once the walk comes back clean — `mv` inside one directory is a rename, which leaves
+      # the mtime alone, so the stored verdict carries the moment the walk began rather than the
+      # moment it ended. A Task file edited while the walk was running is therefore newer than the
+      # verdict that walk stored, instead of hiding behind it forever. A git directory this run
+      # cannot write to costs the cache, never the verdict: `tmp` stays empty and nothing is stored.
+      # 2> comes first — redirections apply left to right, and a failing one reports on whatever
+      # stderr is by then, which the callers fold into the findings they capture.
+      tmp="$cachefile.tmp.$$"
+      [ -n "$sig" ] && { printf '%s\n' "$sig" 2>/dev/null > "$tmp" || tmp=''; } || tmp=''
+      # the path is baked into the trap body rather than read back from $tmp when it fires: that is
+      # a local, and a trap running after the function has returned would find it unset — which
+      # under `set -u` aborts the trap itself, onto that same captured stderr. INT and TERM keep
+      # their default action, which this script has always relied on.
+      # shellcheck disable=SC2064  # expanding now is the point: see the note above
+      [ -n "$tmp" ] && trap "rm -f $(printf '%q' "$tmp") 2>/dev/null || true" EXIT
       prog_start "${#ids[@]}" "$started"
       # the candidate set is handed over rather than enumerated a second time: the signature above
       # already paid for that `find`, and this is the path the cache exists to make cheaper.
@@ -6247,17 +6248,16 @@ validate_tasks() {
         prog_tick
       done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids -- "${cands[@]+"${cands[@]}"}")
       prog_end
-      # temp name carries $$: a fleet lands here in the same second and a shared name would let one
-      # instance win the rename while the losers' `mv` finds nothing. `|| true` on top — the cache is
-      # an optimization, never a reason to fail a run.
-      if [ "${#findings[@]}" = 0 ] && [ -n "$sig" ] && [ -n "$stamp" ]; then
-        # stderr muted throughout: the callers fold this script's error stream into their captured
-        # output, so a failed cache write must not surface there as a Task definition finding.
-        { printf '%s\n' "$sig" > "$cachefile.tmp.$$" && touch -r "$stamp" "$cachefile.tmp.$$" \
-            && mv -f "$cachefile.tmp.$$" "$cachefile"; } 2>/dev/null || rm -f "$cachefile.tmp.$$" 2>/dev/null || true
+      # the temp name carries $$: a fleet lands here in the same second, and a shared name would let
+      # one instance win the rename while the losers' `mv` finds nothing. Publishing is `mv` alone —
+      # atomic, so a reader without the lock sees the old verdict or the new one, never a half file.
+      # stderr muted: a failed cache write must not surface as a Task definition finding.
+      if [ -n "$tmp" ]; then
+        if [ "${#findings[@]}" = 0 ]; then mv -f "$tmp" "$cachefile" 2>/dev/null || true
+        else rm -f "$tmp" 2>/dev/null || true; fi
+        trap - EXIT
       fi
     fi
-    [ -n "$stamp" ] && { rm -f "$stamp" 2>/dev/null || true; trap - EXIT; }
   fi
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap
