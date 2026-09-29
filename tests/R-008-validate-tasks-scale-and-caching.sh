@@ -7,14 +7,15 @@ SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCENARIO_DIR/test-setup.sh"
 
 # R-008-validate-tasks-scale-and-caching — `zero.sh validate-tasks`: the findings cap and its
-# trailing count, the absence of any cache (a real-filesystem read every call), and a 250-id tail
-# that crosses a `find` batch boundary.
+# trailing count, the real-filesystem read that catches an uncommitted edit on the very next call,
+# and a 250-id tail that crosses a `find` batch boundary.
 # Needs real claude: no — a stub `claude` on a scenario-scoped PATH stands in for it
 # Tools beyond the shared prerequisites: none
 # Folder under $TESTROOT: $TESTROOT/R-008-validate-tasks-scale-and-caching
 # Wall-clock budget: seconds — no Run command of this scenario wraps itself in timeout
 # Cross-references: R-003-validate-ids-cache-and-the-launch-gate.sh shares its launch-gate/cache
-# shape by contrast — validate-tasks caches nothing.
+# shape by contrast — validate-tasks is keyed on the filesystem, not on a commit;
+# ISSUE-077-task-cache-and-progress.sh covers that key and the progress display in full.
 #
 # `zero.sh validate-tasks` is a new sibling of `validate-ids` (ISSUE 051): for every unchecked id
 # on the Release Todo List's own tail, it resolves the Task file by id and checks it for a
@@ -58,7 +59,8 @@ check "R4-8b no more line" "$([ "$(grep -c '… and' "$TR/r8b.out")" = 0 ] && ec
 # R4-8 PASS — capped at 5 with a trailing "… and N more"; a tail of 5 or fewer prints every
 # finding with no trailing line.
 
-# R4-9 — no cache: an uncommitted, on-disk-only edit is caught on the very next call
+# R4-9 — an uncommitted, on-disk-only edit is caught on the very next call: the cache is keyed on
+# the filesystem, so nothing about git's view of a Task file can keep a stale verdict alive
 newrepo r9
 mkdir -p tasks
 printf -- '- [x] Z0 seed\n- [ ] TASK-9x live\n' > todo.md; git add -A; git commit -qm t9
@@ -67,15 +69,15 @@ printf -- '### Acceptance criteria\n- [ ] a\n' > tasks/TASK-9x.md
 check "R4-9 clean" "$?" "0"
 printf -- 'no ac heading\n' > tasks/TASK-9x.md
 "$ZERO" validate-tasks > "$TR/r9.out" 2>&1
-# no cache, real filesystem read every call
+# real filesystem read: the edit is newer than the cache file, so the walk runs again
 check "R4-9 after uncommitted edit" "$?" "1"
 check "R4-9 finding" "$(grep -c '^empty-acceptance-criteria TASK-9x:' "$TR/r9.out")" "1"
 git add -A; git commit -qm "commit the edit"
 "$ZERO" validate-tasks > "$TR/r9b.out" 2>&1
 # same, committing changes nothing
 check "R4-9 after commit" "$?" "1"
-# R4-9 PASS — a real-filesystem edit is caught immediately, committed or not; there is no
-# cache to go stale either way, unlike validate-ids' SHA-keyed one (R-003).
+# R4-9 PASS — a real-filesystem edit is caught immediately, committed or not; committing it
+# changes nothing, unlike validate-ids' SHA-keyed cache (R-003), because a finding is never stored.
 
 # R4-11 — a 250-id tail (two `find` batches, unioned before any `canon()` check runs)
 newrepo r11

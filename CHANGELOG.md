@@ -4,6 +4,40 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-09-29
+
+### Added
+
+- `kz-tmux` runs several Kaizero instances at once on the same Todo List, tiled side by side in a
+  single terminal session, so the list gets worked through faster than with one agent. Give it
+  the number of instances and the `kaizero` command to run in each. Panes stay readable after an
+  instance exits, `Ctrl-b Ctrl-c` stops all of them at once, and over SSH the session survives a
+  dropped connection so you can reattach later.
+- `kz-tmux -t` sets how long to wait between starting each instance (default 1 second), so 
+  the load on API is normalized.
+- A Task definition check that takes more than a two seconds now shows a progress bar naming what
+  it is validating and how far it has got, and leaves no trace on the screen once it is done. 
+  Piped to a file it writes a handful of plain progress lines instead.
+
+### Changed
+
+- Kaizero no longer re-checks every Task definition before each Claude session when nothing has
+  changed, so the pause between sessions stays short on a long Todo List. Editing, adding,
+  removing or renaming a Task file makes the next launch check again.
+- The wait between Claude sessions went from 5 to 2 seconds. Set `KAIZERO_RESTART_WAIT` to change
+  it; the wait after an unreachable origin still grows from it, up to 128 seconds.
+- The default "no progress" timeout before Kaizero restarts Claude went from 1 to 3 minutes,
+  which stops healthy but quiet turns from being cut short.
+- Error messages now go to the error stream instead of normal output, so they stay visible when
+  you pipe Kaizero's output to a file and no longer pollute it.
+
+### Fixed
+
+- Timestamps Kaizero asks the agent to write into evidence lines and gate notes now come from
+  the machine's clock, so they reflect the real date instead of whatever the agent guessed.
+- Kaizero no longer fails to start in terminals that report limited capabilities; colored output
+  is simply skipped there.
+
 ## [0.1.6] - 2026-09-23
 
 ### Added

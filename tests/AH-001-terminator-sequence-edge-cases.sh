@@ -38,13 +38,23 @@ rec="$TH/h1.rec"; printf '%s\n%s\n%s\n' "$H1VICTIM" "$vst" 1 > "$rec"
 reason="$TH/h1.reason"
 "$TERMINATOR" "$rec" 1 "$reason" > "$TH/h1.out" 2>&1 &
 TPID=$!
-# overwrite the record with the bystander's identity (a different epoch) shortly after dispatch,
-# well inside WATCHDOG_GRACE=10, before the recheck — exactly as a real restart would
-sleep 1
+# overwrite the record with the bystander's identity (a different epoch) mid-wait — well inside
+# WATCHDOG_GRACE=10, before the recheck — exactly as a real restart would. The overwrite must land
+# AFTER terminator.sh's foreground preamble has already validated the record and forked, or its
+# `session_record_check "$rec" 1` reads epoch 2 instead and takes the "nothing to target" early
+# exit: no TERM, no grace loop, no reason file at all, and H1 then proves nothing about the
+# mid-wait branch it exists to cover. Waiting for the file the forked child writes before that
+# loop ("TERM sent") is the observable proof the preamble is past, so the window no longer depends
+# on the backgrounded terminator winning a race against a fixed sleep under CPU load.
+wait_for(){ local i=0; while [ "$i" -lt 150 ]; do eval "$1" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+wait_for '[ -s "$reason" ]'
 bst="$(ps -o lstart= -p "$H1BYSTANDER" 2>/dev/null | awk '{$1=$1;print}')"
 printf '%s\n%s\n%s\n' "$H1BYSTANDER" "$bst" 2 > "$rec"
 wait "$TPID" 2>/dev/null
-sleep 1
+# the superseded line is written by the forked child one grace-loop iteration later, so wait for
+# the line itself rather than a fixed second — a bounded wait that still lets the check below FAIL
+# if the line never arrives.
+wait_for 'grep -q superseded "$reason" 2>/dev/null'
 # left alone: the deaf victim survives (no KILL follows a superseded record)
 check "H1 victim survives superseded record" "$(kill -0 "$H1VICTIM" 2>/dev/null && echo yes || echo no)" "yes"
 # the new record names it, but its epoch (2) never matched WANT_EPOCH=1 either

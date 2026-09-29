@@ -47,19 +47,26 @@ Runs [`claude`](https://claude.com/product/claude-code) on a predefined prompt i
 ```
 sudo curl -fsSL https://raw.githubusercontent.com/IvanRublev/kaizero/refs/heads/master/kaizero.sh -o /usr/local/bin/kaizero
 sudo chmod +x /usr/local/bin/kaizero
+sudo curl -fsSL https://raw.githubusercontent.com/IvanRublev/kaizero/refs/heads/master/kz-tmux.sh -o /usr/local/bin/kz-tmux
+sudo chmod +x /usr/local/bin/kz-tmux
 ```
 
 Make sure that your Todo List file is committed in the git repository which is separate from you codebase one.
 Make sure the working tree of both repositories are in a clean state (commit or stash any changes).
 
-Then run `kaizero` pointing to your Todo List, picking the mode by how the work gets reviewed:
+Then run `kaizero` pointing to your Todo List to work through it with one agent, picking the mode by how the work gets reviewed:
 
 ```sh
 kaizero todo.md                 # team merge (pull) requests review
 kaizero --local-merge todo.md   # commit review
 ```
 
-You can run either command in multiple parallel terminals to work through the Tasks faster.
+To work through the Tasks faster with several agents at once, pass `kz-tmux` the agent count, then the
+full `kaizero` command to run in each — it tiles them into one tmux session:
+
+```sh
+kz-tmux 6 kaizero todo.md
+```
 
 > ⚠️ Kaizero runs `claude` **unattended with permissions auto-approved** and **commits on its own** to the branch you launch it on. Only ever point it at a Todo List you wrote or reviewed, on a branch with a clean, committed tree — git is your only undo.
 
@@ -142,8 +149,13 @@ Supported on **macOS and Linux** (the script is bash-3.2-safe, so stock macOS `b
    brew install gh jq          # github.com / GitHub Enterprise
    brew install glab jq        # gitlab.com / self-hosted GitLab
    ```
+3. **tmux** — needed to run several agents at once with `kz-tmux`, tiled into parallel
+   terminal windows.
+   ```sh
+   brew install tmux           # macOS; Linux ships it in most package managers
+   ```
 
-These prerequisites are guard-checked at startup (the forge's only when the run lands requests); the script exits with a clear message if it is missing — including a renamed or dropped `gh`/`glab` flag, caught before a launch, not only in CI.
+These prerequisites are guard-checked at startup (the forge's only when the run lands requests, tmux is not checked); the script exits with a clear message if it is missing — including a renamed or dropped `gh`/`glab` flag, caught before a launch, not only in CI.
 
 **Transcript-schema contract.** Kaizero couples to one thing in Claude Code internals: the session transcript's `message.usage` schema. Kaizero's own Stop hook records each session's `transcript_path` (a field of the hook payload), and reads it twice, for two different readers. The **context-rot guard** (below) reads the newest usage record on every turn to decide whether to restart. The **token report**, after `claude` exits, reads the whole transcript and sums the `message.usage` fields of every assistant line: `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` — the four categories Anthropic bills separately. One API request is written as several transcript lines, one per content block, each repeating the same `usage` object verbatim, so the token report **dedupes by the line's `requestId`** — a rule that belongs to the token report alone, since the context-rot guard keeps only the latest record regardless of request. Both readers take only the first (parent) match of each field name on a line: `usage.iterations[]` repeats all four names one level down, and `usage.cache_creation` carries the `ephemeral_5m`/`ephemeral_1h` leaves that already sum into the parent.
 
@@ -500,6 +512,12 @@ KAIZERO_QUOTA_RETRY=30m kaizero todo.md
 
 ```sh
 KAIZERO_DEPENDENCY_WAIT=20m kaizero todo.md
+```
+
+**`KAIZERO_PROGRESS_DELAY`** — how long `zero.sh validate-tasks` has been walking before its progress bar appears, as a plain count of seconds. Default `2`; `0` draws from the first id resolved. The delay exists so a short walk draws nothing at all: a bar that appears and clears again inside a frame or two is noise, not progress. Raise it to push the bar out to only the walks you consider slow, or set `0` to watch every walk from its first tick. The bar needs a terminal on kaizero's display descriptor — where the walk is logged instead, its plain lines are written from the start and this delay never applies, because a log is a record of what ran and a line cannot flicker. A value that is not a plain count of seconds falls back to the default silently: both of `zero.sh`'s own streams are captured by its callers and read back as findings, so a complaint about a bad value would fail the very walk it commented on.
+
+```sh
+KAIZERO_PROGRESS_DELAY=0 kaizero todo.md
 ```
 
 **`KAIZERO_LINK`** — comma-separated top-level names symlinked from the repo root into every Task worktree. Unset by default. A worktree is a checkout of tracked files only, so anything gitignored is absent there: if your Task lines point at Task files you keep in another git repository — `tasks/TASK-031.md` holding the Acceptance Criteria for `- [ ] TASK-031 …` — the session never sees them and works from the one-line title alone. Listing the directory here links it in, so the criteria are readable and a tick lands in the real file rather than in a copy the worktree removal deletes. Each linked name is added to `.git/info/exclude`, so it stays out of the session's `git add -A` and out of this repository.

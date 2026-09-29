@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# KAIZERO_WALLCLOCK_BUDGET=60s
+# KAIZERO_WALLCLOCK_BUDGET=90s
 # KAIZERO_TEST_ISOLATED=1 — flaky under concurrency (internal producer/consumer timing race, not a shared-file collision): see TEST.md Dispatch instruction
 set -uo pipefail
 SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

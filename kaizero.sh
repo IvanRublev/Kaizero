@@ -7,7 +7,7 @@
 # Run -h for usage.
 set -euo pipefail
 
-VERSION="0.1.6"
+VERSION="0.1.7"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
 
 # lowest released version of each forge CLI known to carry every flag/field assert_forge_flags
@@ -29,15 +29,17 @@ case "$(uname)" in
     *)      PTY_STYLE=util-linux ;;
 esac
 
-RESTART_WAIT="${KAIZERO_RESTART_WAIT:-5}" # seconds between claude restarts — the window to press Ctrl+C
+RESTART_WAIT="${KAIZERO_RESTART_WAIT:-2}" # seconds between claude restarts — the window to press Ctrl+C
 WAIT_TICK="${KAIZERO_WAIT_TICK:-5}" # seconds between claimable-Task probes while every unchecked Task is peer-held
 WAIT_FRAME=1         # seconds per spinner frame on a terminal — one |/-\ revolution every 4
 WAIT_STEP=5          # seconds the terminal's elapsed clock advances in — at 1Hz a live clock is noise
 LOG_TICK="${KAIZERO_LOG_TICK:-20}" # seconds between waiting lines when stdout is a log or a pipe, not a terminal
-WATCHDOG_DEFAULT=1m # KAIZERO_WATCHDOG default: how long claude may burn no CPU before it is killed
+WATCHDOG_DEFAULT=3m # KAIZERO_WATCHDOG default: how long claude may burn no CPU before it is killed
 QUOTA_RETRY_DEFAULT=15m # KAIZERO_QUOTA_RETRY default: gap between quota-wait retries (BUG-071 mechanism 2)
 WATCHDOG_GRACE="${KAIZERO_WATCHDOG_GRACE:-10}" # seconds the watchdog waits after its SIGTERM before escalating to SIGKILL
 DEPENDENCY_WAIT_DEFAULT=10m # KAIZERO_DEPENDENCY_WAIT default: ceiling on the no-claim wait below
+PROGRESS_DELAY_DEFAULT=2    # KAIZERO_PROGRESS_DELAY default, for --help only: the walk this documents runs
+                            # in the emitted zero.sh, which carries the value it actually applies (PROG_DELAY_DEFAULT)
 REVIEW_POLL_DEFAULT=5m      # KAIZERO_REVIEW_POLL default: how often a park syncs the forge
 FORGE_AUTH_RETRY_WAIT="${KAIZERO_FORGE_AUTH_RETRY_WAIT:-2}" # seconds forge_auth_ok waits between its own retries
 NETWORK_PROBE_TIMEOUT=10    # seconds a reachability probe (BUG-047) may block — bounds a
@@ -53,7 +55,8 @@ usage() {
   # single-quoted heredoc keeps backticks literal; sed injects the RESTART_WAIT constant.
   sed -e "s/@@RESTART_WAIT@@/$RESTART_WAIT/g" -e "s/@@PROG@@/$PROG/g" -e "s/@@VERSION@@/$VERSION/g" \
       -e "s/@@WATCHDOG_DEFAULT@@/$WATCHDOG_DEFAULT/g" \
-      -e "s/@@DEPENDENCY_WAIT_DEFAULT@@/$DEPENDENCY_WAIT_DEFAULT/g" <<'USAGE'
+      -e "s/@@DEPENDENCY_WAIT_DEFAULT@@/$DEPENDENCY_WAIT_DEFAULT/g" \
+      -e "s/@@PROGRESS_DELAY_DEFAULT@@/$PROGRESS_DELAY_DEFAULT/g" <<'USAGE'
 usage: @@PROG@@ [todo-file-path] [--local-merge] [--always-on] [--no-co-authorship] [-t|--taskprompt TEXT]
        @@PROG@@ --version
 version @@VERSION@@
@@ -133,6 +136,16 @@ version @@VERSION@@
                                    instant the block clears (a peer merges or its holder
                                    dies) or this ceiling elapses, whichever comes first;
                                    the relaunched session claims the next free Task.
+
+    KAIZERO_PROGRESS_DELAY=seconds
+                                   How long `zero.sh validate-tasks` walks before its
+                                   progress bar appears, as a plain count of seconds.
+                                   Default @@PROGRESS_DELAY_DEFAULT@@, which keeps a short
+                                   walk from drawing a bar that would clear again inside a
+                                   frame; 0 draws from the first id resolved.
+                                   The bar needs a terminal on the display descriptor —
+                                   where the walk is logged instead, its plain lines are
+                                   written from the start and this delay does not apply.
 
     KAIZERO_LINK=name[,name…]   Top-level directories symlinked from the repo root
                                    into every Task worktree. Unset by default. A worktree
@@ -268,14 +281,14 @@ resolve_forge() {
 decide_origin() {
   local root="$1" origin rc=0
   origin="$(git -C "$root" remote get-url origin 2>/dev/null)" || origin=""
-  [ -n "$origin" ] || { echo "$PROG: No 'origin' remote — landing as a merge/pull request is the default and needs one to hand a Task off to; run with --local-merge to merge locally instead — it merges directly to the current branch with no review step, review the commits it produces afterward"; return 1; }
+  [ -n "$origin" ] || { echo "$PROG: No 'origin' remote — landing as a merge/pull request is the default and needs one to hand a Task off to; run with --local-merge to merge locally instead — it merges directly to the current branch with no review step, review the commits it produces afterward" >&2; return 1; }
   origin_parts "$origin"
   resolve_forge "$ORIGIN_HOST" || rc=$?
   if [ "$rc" = 2 ]; then
-    echo "$PROG: KAIZERO_FORGE='$KAIZERO_FORGE' is not gh or glab — those are the only two forges this mode implements"
+    echo "$PROG: KAIZERO_FORGE='$KAIZERO_FORGE' is not gh or glab — those are the only two forges this mode implements" >&2
     return 1
   fi
-  [ "$rc" = 0 ] || { echo "$PROG: Unsupported forge '${ORIGIN_HOST:-$ORIGIN_REDUCED}' (origin: $ORIGIN_REDUCED$(rewrite_note "$root" "$ORIGIN_REDUCED")) — MR mode only knows github and gitlab; set KAIZERO_FORGE=gh|glab for a self-hosted instance of one, or run with --local-merge to merge locally instead"; return 1; }
+  [ "$rc" = 0 ] || { echo "$PROG: Unsupported forge '${ORIGIN_HOST:-$ORIGIN_REDUCED}' (origin: $ORIGIN_REDUCED$(rewrite_note "$root" "$ORIGIN_REDUCED")) — MR mode only knows github and gitlab; set KAIZERO_FORGE=gh|glab for a self-hosted instance of one, or run with --local-merge to merge locally instead" >&2; return 1; }
   ORIGIN_URL="$ORIGIN_REPO_ARG"
 }
 
@@ -429,13 +442,13 @@ run_doctor() {
     # guard: claude CLI present AND runnable — `command -v` only proves a name resolves on PATH,
     # which a version-manager shim (asdf, etc.) always does regardless of which version it
     # resolves to for this cwd; only invoking it proves the real launch (below) will work here.
-    command -v claude >/dev/null 2>&1 || { echo "$PROG: Claude CLI not found on PATH — install Claude Code: https://claude.com/product/claude-code"; exit 1; }
+    command -v claude >/dev/null 2>&1 || { echo "$PROG: Claude CLI not found on PATH — install Claude Code: https://claude.com/product/claude-code" >&2; exit 1; }
     local claude_v_out
-    claude_v_out=$(claude -v 2>&1) || { echo "$PROG: Claude CLI found on PATH but failed to run — $claude_v_out"; exit 1; }
+    claude_v_out=$(claude -v 2>&1) || { echo "$PROG: Claude CLI found on PATH but failed to run — $claude_v_out" >&2; exit 1; }
 
     # guard: flock prerequisite (see top) — present AND runnable.
-    command -v flock >/dev/null 2>&1 || { echo "$PROG: Flock not found on PATH (Linux: util-linux; macOS: brew install flock)"; exit 1; }
-    flock -n "$(mktemp)" true 2>/dev/null || { echo "$PROG: Flock present but not runnable"; exit 1; }
+    command -v flock >/dev/null 2>&1 || { echo "$PROG: Flock not found on PATH (Linux: util-linux; macOS: brew install flock)" >&2; exit 1; }
+    flock -n "$(mktemp)" true 2>/dev/null || { echo "$PROG: Flock present but not runnable" >&2; exit 1; }
     return 0
   fi
 
@@ -704,17 +717,17 @@ mr_network_and_auth_ok() {
 if [ "${1:-}" = --doctor ]; then
   run_doctor
   if [ "${2:-}" != --local-merge ]; then
-    git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed."; exit 1; }
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed." >&2; exit 1; }
     DOCTOR_BASE="$(git symbolic-ref -q --short HEAD)" \
-        || { echo "$PROG: Detached HEAD in the target repository '$(pwd -P)' — check out the base branch first."; exit 1; }
-    DOCTOR_ROOT="$(wt_root "$(pwd -P)")" || { echo "$PROG: Could not resolve the doctor root"; exit 1; }
+        || { echo "$PROG: Detached HEAD in the target repository '$(pwd -P)' — check out the base branch first." >&2; exit 1; }
+    DOCTOR_ROOT="$(wt_root "$(pwd -P)")" || { echo "$PROG: Could not resolve the doctor root" >&2; exit 1; }
     if is_main_or_bare "$(pwd -P)"; then
-      [ "$(pwd -P)" = "$DOCTOR_ROOT" ] || { echo "$PROG: Not at the main repo root — cd to '$DOCTOR_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)"; exit 1; }
+      [ "$(pwd -P)" = "$DOCTOR_ROOT" ] || { echo "$PROG: Not at the main repo root — cd to '$DOCTOR_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)" >&2; exit 1; }
     else
       if DOCTOR_MAIN="$(main_root_of "$(git rev-parse --path-format=absolute --git-common-dir)")"; then
-        echo "$PROG: Not at the main repo root — cd to '$DOCTOR_MAIN' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)"; exit 1
+        echo "$PROG: Not at the main repo root — cd to '$DOCTOR_MAIN' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)" >&2; exit 1
       else
-        echo "$PROG: Not at the main repo root, and its path could not be determined here — cd to the repository's own working directory (not a linked worktree) first."; exit 1
+        echo "$PROG: Not at the main repo root, and its path could not be determined here — cd to the repository's own working directory (not a linked worktree) first." >&2; exit 1
       fi
     fi
     TARGET_ROOT="$DOCTOR_ROOT"; TARGET_BASE="$DOCTOR_BASE"
@@ -1114,24 +1127,24 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)          usage; exit 0 ;;
     --version)          echo "$VERSION"; exit 0 ;;
-    -t|--taskprompt)    [ $# -ge 2 ] || { echo "$PROG: $1 needs a value"; exit 1; }; TASK_PROMPT="$2"; shift 2 ;;
+    -t|--taskprompt)    [ $# -ge 2 ] || { echo "$PROG: $1 needs a value" >&2; exit 1; }; TASK_PROMPT="$2"; shift 2 ;;
     --taskprompt=*)     TASK_PROMPT="${1#*=}"; shift ;;
     --local-merge)       LOCAL_MERGE=1; shift ;;
     --always-on)         ALWAYS_ON=1; shift ;;
     --no-co-authorship)  KAIZERO_NO_CO_AUTHORSHIP=1; shift ;;
     --)                 shift; while [ $# -gt 0 ]; do ARGS+=("$1"); shift; done ;;
-    -*)                 echo "$PROG: Unknown option: $1"; usage; exit 1 ;;
+    -*)                 echo "$PROG: Unknown option: $1" >&2; usage; exit 1 ;;
     *)                  ARGS+=("$1"); shift ;;
   esac
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}   # guard empty-array expansion under set -u (portable)
 
-[ $# -le 1 ] || { echo "$PROG: Too many positional args; expected at most one todo-file-path"; exit 1; }
+[ $# -le 1 ] || { echo "$PROG: Too many positional args; expected at most one todo-file-path" >&2; exit 1; }
 TODO_ARG="${1:-}"
 
 # guardrail: a real run needs a repository; a parse-level answer (-h, unknown option, too many
 # args) above never reaches here, so it works from anywhere.
-git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed."; exit 1; }
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed." >&2; exit 1; }
 
 # the ONE branch this launch is invoked on — the target's branch (below, TARGET_BASE). Computed
 # AFTER arg parsing (above) so -h/--help exits before this git call — outside a git repo, help
@@ -1151,8 +1164,10 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   unset _kz_colors _kz_utf8
 fi
 if [ "$COLOR_CAPABLE" = 1 ]; then
-  C_DIM="$(tput dim)"; C_BOLD="$(tput bold)"; C_CYAN="$(tput setaf 6)"; C_GREEN="$(tput setaf 2)"
-  C_YELLOW="$(tput setaf 3)"; C_RED="$(tput setaf 1)"; C_WHITE="$(tput setaf 7)"; C_RESET="$(tput sgr0)"
+  C_DIM="$(tput dim 2>/dev/null || true)"; C_BOLD="$(tput bold 2>/dev/null || true)"
+  C_CYAN="$(tput setaf 6 2>/dev/null || true)"; C_GREEN="$(tput setaf 2 2>/dev/null || true)"
+  C_YELLOW="$(tput setaf 3 2>/dev/null || true)"; C_RED="$(tput setaf 1 2>/dev/null || true)"
+  C_WHITE="$(tput setaf 7 2>/dev/null || true)"; C_RESET="$(tput sgr0 2>/dev/null || true)"
   C_BWHITE=$'\033[38;2;255;255;255m'; C_BLUE=$'\033[38;2;74;201;243m'; C_GOLD=$'\033[38;2;217;158;64m'
   BOX_TL='╭'; BOX_TR='╮'; BOX_BL='╰'; BOX_BR='╯'; BOX_H='─'; BOX_V='│'; ARROW='→'; DOT='·'; SNOW='❄'
 else
@@ -1160,6 +1175,10 @@ else
   C_BWHITE=''; C_BLUE=''; C_GOLD=''
   BOX_TL='+'; BOX_TR='+'; BOX_BL='+'; BOX_BR='+'; BOX_H='-'; BOX_V='|'; ARROW='->'; DOT='.'; SNOW=''
 fi
+# handed down to the emitted zero.sh, which draws validate-tasks' progress bar on fd 4 and needs
+# this verdict for its STYLING only — glyph and color, never bar-vs-plain-lines, which fd 4's own
+# terminal-ness decides there.
+export KAIZERO_COLOR="$COLOR_CAPABLE"
 # c COLOR TEXT... — wrap TEXT in COLOR, reset after. Empty COLOR (plain mode) is a no-op passthrough.
 c() { local color=$1; shift; printf '%s%s%s' "$color" "$*" "$C_RESET"; }
 # icon — the "❄ " prefix in hoody-blue, or nothing at all (no bare space either) in plain mode.
@@ -1236,18 +1255,18 @@ fi
 # branch (not detached) before we start — else refuse and let the human decide. (Clean-tree is
 # checked further below, AFTER the nesting check: an unignored nested coordination repo shows
 # up as an untracked path in `git status`, and the nesting message is the more useful one.)
-[ "$LAUNCH_BASE" != HEAD ] || { echo "$PROG: Detached HEAD in the target repository '$(pwd -P)' — check out the base branch first."; exit 1; }
+[ "$LAUNCH_BASE" != HEAD ] || { echo "$PROG: Detached HEAD in the target repository '$(pwd -P)' — check out the base branch first." >&2; exit 1; }
 # guardrail: claude's Bash calls run from cwd, and the zero prompt + `.git/zero.sh` + Task
 # worktree paths all assume cwd is the target's main worktree root — refuse a subdir launch,
 # and a launch inside a leftover claim worktree, so they never misfire.
-REPO_ROOT="$(wt_root "$(pwd -P)")" || { echo "$PROG: Could not resolve the target repository root"; exit 1; }
+REPO_ROOT="$(wt_root "$(pwd -P)")" || { echo "$PROG: Could not resolve the target repository root" >&2; exit 1; }
 if is_main_or_bare "$(pwd -P)"; then
-  [ "$(pwd -P)" = "$REPO_ROOT" ] || { echo "$PROG: Not at the main repo root — cd to '$REPO_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)"; exit 1; }
+  [ "$(pwd -P)" = "$REPO_ROOT" ] || { echo "$PROG: Not at the main repo root — cd to '$REPO_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)" >&2; exit 1; }
 else
   if REPO_ROOT="$(main_root_of "$(git rev-parse --path-format=absolute --git-common-dir)")"; then
-    echo "$PROG: Not at the main repo root — cd to '$REPO_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)"; exit 1
+    echo "$PROG: Not at the main repo root — cd to '$REPO_ROOT' first. (Kaizero's own \`ts-*\`/\`tt-*\` Task worktrees are never valid launch dirs.)" >&2; exit 1
   else
-    echo "$PROG: Not at the main repo root, and its path could not be determined here — cd to the repository's own working directory (not a linked worktree) first."; exit 1
+    echo "$PROG: Not at the main repo root, and its path could not be determined here — cd to the repository's own working directory (not a linked worktree) first." >&2; exit 1
   fi
 fi
 TARGET_ROOT="$(pwd -P)"
@@ -1270,8 +1289,8 @@ fi
 # --- todo path resolved: absolute, physical (pwd -P — a logical path never prefix-matches
 # git's physical worktree roots under a symlinked /tmp) --------------------------------
 if [ -n "$TODO_ARG" ]; then TODO_INPUT="$TODO_ARG"; else read -r -p "Path to todo.md file: " TODO_INPUT; fi
-[ -n "$TODO_INPUT" ] || { echo "$PROG: No path entered"; exit 1; }
-[ -f "$TODO_INPUT" ] || { echo "$PROG: File not found: $TODO_INPUT"; exit 1; }
+[ -n "$TODO_INPUT" ] || { echo "$PROG: No path entered" >&2; exit 1; }
+[ -f "$TODO_INPUT" ] || { echo "$PROG: File not found: $TODO_INPUT" >&2; exit 1; }
 TODO_DIR="$(cd "$(dirname "$TODO_INPUT")" && pwd -P)"
 TODO_ABS_INPUT="$TODO_DIR/$(basename "$TODO_INPUT")"
 
@@ -1279,21 +1298,21 @@ TODO_ABS_INPUT="$TODO_DIR/$(basename "$TODO_INPUT")"
 # COORD_ROOT is the todo's own worktree root, via the same discriminator as the target guard
 # above, never git's top-level lookup.
 git -C "$TODO_DIR" rev-parse --git-dir >/dev/null 2>&1 \
-    || { echo "$PROG: '$TODO_INPUT' is not inside a git repository — the Release Todo List's repository is the coordination repository"; exit 1; }
+    || { echo "$PROG: '$TODO_INPUT' is not inside a git repository — the Release Todo List's repository is the coordination repository" >&2; exit 1; }
 TODO_WT="$(wt_root "$TODO_DIR")" \
-    || { echo "$PROG: Could not resolve the coordination repository root"; exit 1; }
+    || { echo "$PROG: Could not resolve the coordination repository root" >&2; exit 1; }
 if is_main_or_bare "$TODO_DIR"; then
     COORD_ROOT="$TODO_WT"
 else
     if COORD_ROOT="$(main_root_of "$(git -C "$TODO_DIR" rev-parse --path-format=absolute --git-common-dir)")"; then
-        echo "$PROG: '$TODO_INPUT' is in the linked worktree '$TODO_WT' — use the main checkout '$COORD_ROOT' instead"; exit 1
+        echo "$PROG: '$TODO_INPUT' is in the linked worktree '$TODO_WT' — use the main checkout '$COORD_ROOT' instead" >&2; exit 1
     else
-        echo "$PROG: '$TODO_INPUT' is in the linked worktree '$TODO_WT' — its repository's main checkout could not be determined here; use the repository's own working directory (not a linked worktree) instead"; exit 1
+        echo "$PROG: '$TODO_INPUT' is in the linked worktree '$TODO_WT' — its repository's main checkout could not be determined here; use the repository's own working directory (not a linked worktree) instead" >&2; exit 1
     fi
 fi
 TODO_PATH="${TODO_ABS_INPUT#"$COORD_ROOT"/}"
 COORD_BASE="$(git -C "$COORD_ROOT" symbolic-ref -q --short HEAD)" \
-    || { echo "$PROG: Detached HEAD in the coordination repository '$COORD_ROOT' — check out its base branch first."; exit 1; }
+    || { echo "$PROG: Detached HEAD in the coordination repository '$COORD_ROOT' — check out its base branch first." >&2; exit 1; }
 
 # --- same-repository detection: compares git common dirs, resolved to absolute physical paths
 CC="$(cd "$COORD_ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
@@ -1305,7 +1324,7 @@ if [ "$CC" = "$TC" ]; then SAME_REPO=1; else SAME_REPO=0; fi
 # default, this fires for any same-repository launch whose origin qualifies, so --local-merge is
 # what keeps that layout running at all.
 if [ "$MR_MODE" = 1 ] && [ "$SAME_REPO" = 1 ]; then
-    echo "$PROG: MR mode needs a separate coordination repository — '$TODO_ABS_INPUT' is inside the target '$TARGET_ROOT'; a merge request has nowhere to go from the repository that also holds the Release Todo List — run with --local-merge to merge locally instead"
+    echo "$PROG: MR mode needs a separate coordination repository — '$TODO_ABS_INPUT' is inside the target '$TARGET_ROOT'; a merge request has nowhere to go from the repository that also holds the Release Todo List — run with --local-merge to merge locally instead" >&2
     exit 1
 fi
 
@@ -1328,7 +1347,7 @@ if [ "$TARGET_ROOT" != "$COORD_ROOT" ]; then
         REL="${INNER#"$OUTER"/}"
         if ! git -C "$OUTER" check-ignore -q "$REL" \
              && ! git -C "$OUTER" ls-files --stage -- "$REL" 2>/dev/null | grep -q '^160000'; then
-            echo "$PROG: '$INNER' lives inside '$OUTER' but is neither ignored nor a submodule there — add '$REL/' to $OUTER/.gitignore or .git/info/exclude"
+            echo "$PROG: '$INNER' lives inside '$OUTER' but is neither ignored nor a submodule there — add '$REL/' to $OUTER/.gitignore or .git/info/exclude" >&2
             exit 1
         fi
     fi
@@ -1342,7 +1361,7 @@ if [ "$MR_MODE" = 1 ]; then TB="refs/remotes/origin/$TARGET_BASE"; else TB="refs
 
 # --- clean-tree guards: target's own (today's, kept) and coordination's (new) ----------
 [ -z "$(git status --porcelain)" ] \
-    || { echo "$PROG: Working tree on '$TARGET_BASE' is dirty — commit or stash first."; git status --short; exit 1; }
+    || { echo "$PROG: Working tree on '$TARGET_BASE' is dirty — commit or stash first." >&2; git status --short; exit 1; }
 if [ -n "$(git -C "$COORD_ROOT" status --porcelain)" ]; then
     # BUG-058h: a crashed agent's own uncommitted edit (a Task file tick, or a todo.md tick
     # never reaching commit_ac_checkoff before the process died) must not block every later
@@ -1369,7 +1388,7 @@ if [ -n "$(git -C "$COORD_ROOT" status --porcelain)" ]; then
         done
     fi
     if [ -n "$CG_LIVE_PID" ]; then
-        echo "$PROG: Working tree on '$COORD_ROOT@$COORD_BASE' — session $CG_LIVE_PID is still live and mid-commit on its Task; retry the launch shortly."
+        echo "$PROG: Working tree on '$COORD_ROOT@$COORD_BASE' — session $CG_LIVE_PID is still live and mid-commit on its Task; retry the launch shortly." >&2
         exit 1
     elif [ -n "$CG_DEAD_PID" ]; then
         while IFS= read -r CG_LINE; do
@@ -1381,7 +1400,7 @@ if [ -n "$(git -C "$COORD_ROOT" status --porcelain)" ]; then
             esac
         done < <(git -C "$COORD_ROOT" status --porcelain)
     else
-        echo "$PROG: Working tree on '$COORD_ROOT@$COORD_BASE' is dirty — commit or stash first."; git -C "$COORD_ROOT" status --short; exit 1
+        echo "$PROG: Working tree on '$COORD_ROOT@$COORD_BASE' is dirty — commit or stash first." >&2; git -C "$COORD_ROOT" status --short; exit 1
     fi
 fi
 # guardrail: the merge gate diffs the Release Todo List against the branch's fork point on the
@@ -1389,7 +1408,7 @@ fi
 # dirty-tree guard above misses a gitignored file) makes EVERY merge refuse "newly checks 0
 # boxes" and nothing can ever land.
 git -C "$COORD_ROOT" cat-file -e "$COORD_BASE:$TODO_PATH" 2>/dev/null \
-    || { echo "$PROG: '$TODO_PATH' is not tracked on '$COORD_BASE' in '$COORD_ROOT' — commit it there first, else every merge is refused and no Task can land."; exit 1; }
+    || { echo "$PROG: '$TODO_PATH' is not tracked on '$COORD_BASE' in '$COORD_ROOT' — commit it there first, else every merge is refused and no Task can land." >&2; exit 1; }
 
 # refuse a --local-merge launch over a Release Todo List that still carries open `[↑]` requests
 # — those boxes only exist because an earlier launch ran in MR mode; merging locally now would
@@ -1397,7 +1416,7 @@ git -C "$COORD_ROOT" cat-file -e "$COORD_BASE:$TODO_PATH" 2>/dev/null \
 if [ "$MR_MODE" = 0 ]; then
     OPEN_REQS="$(open_requests)"
     [ "$OPEN_REQS" -eq 0 ] \
-        || { echo "$PROG: '$TODO_PATH' has $OPEN_REQS task(s) marked '[↑]' (open merge/pull requests) — drop --local-merge to keep driving them, or clear those boxes by hand; a local merge would land them instead of syncing their review"; exit 1; }
+        || { echo "$PROG: '$TODO_PATH' has $OPEN_REQS task(s) marked '[↑]' (open merge/pull requests) — drop --local-merge to keep driving them, or clear those boxes by hand; a local merge would land them instead of syncing their review" >&2; exit 1; }
 fi
 
 # MR mode: FORGE and ORIGIN_URL already came from the origin/forge decision at the top of this
@@ -5369,9 +5388,12 @@ unchecked_todos() {
 # resolve_task_ids — reused, never reimplemented) gets that file's $COORD_ROOT-absolute path
 # appended. A checked or other-symbol line, or an unchecked id resolving to zero or multiple
 # files, prints unchanged — this only ever adds information, never a verdict.
-todo_list() {
-  local raw
-  raw=$(git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" | awk '
+# the Release Todo List's own tail on the coordination base — from the two lines before the first
+# unchecked box to the end, fence-aware — with no Task-file paths appended. todo_list annotates
+# this; unchecked_tail_ids reads it as it is, since the annotation it would otherwise pay a whole
+# resolution walk for appears only at the end of a line and never in the id it takes.
+todo_tail() {
+  git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" | awk '
     /^[ \t]*```/ { fence = !fence; next }
     fence        { next }
     /^[ \t]*- \[[^]]+\]/ {
@@ -5382,7 +5404,12 @@ todo_list() {
       if (!cut) exit 0
       start = cut - 2; if (start < 1) start = 1
       for (i = start; i <= n; i++) print line[i]
-    }')
+    }'
+}
+
+todo_list() {
+  local raw
+  raw=$(todo_tail)
   [ -n "$raw" ] || return 0
 
   local ids=() id
@@ -5918,9 +5945,11 @@ canon() {
 }
 
 # every unchecked id in todo-list's own tail, in its own walk order — validate_tasks resolves
-# exactly this set, never the checked/other-symbol lines the tail also carries for context.
+# exactly this set, never the checked/other-symbol lines the tail also carries for context. Reads
+# the tail directly rather than through todo_list: that would resolve every one of these ids to its
+# Task file first, the very walk validate_tasks is here to decide whether to run at all.
 unchecked_tail_ids() {
-  todo_list | awk '
+  todo_tail | awk '
     # a first token shaped exactly `[label](path)` (no space between `]` and `(`, no nested
     # brackets in label) resolves to its bracketed label as the id — the Quick-Entry markdown
     # link form. Anything else is used unchanged.
@@ -5935,26 +5964,26 @@ unchecked_tail_ids() {
     }'
 }
 
-# resolve_task_ids: reads raw ids on stdin, one per line; for each, in the SAME order, prints
-# one TSV line: <id>\t<ok|missing|ambiguous>\t<path1>[\x1f<path2>...]. One shared `find` per 200
-# ids (ARG_MAX headroom, never a hard limit) over $COORD_ROOT alone — a Task file living only
-# under $TARGET_ROOT is unresolvable by design (two-repo mode), and a batch's result set is
-# unioned before any id's own canon() check runs, so batching stays exactly equivalent to
-# resolving one id at a time.
-resolve_task_ids() {
+# candidate_paths: reads raw ids on stdin, one per line; prints, NUL-separated, every file under
+# $COORD_ROOT whose name could resolve to one of them. One shared `find` per 200 ids (ARG_MAX
+# headroom, never a hard limit) over $COORD_ROOT alone — a Task file living only under
+# $TARGET_ROOT is unresolvable by design (two-repo mode). This is what "candidate" means for both
+# callers: resolve_task_ids matches these against each id, and validate_tasks' cache signature
+# describes exactly this set, so a Markdown file no unchecked id could resolve to changes neither.
+candidate_paths() {
   local ids=() id
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done
   local n=${#ids[@]}
   [ "$n" -gt 0 ] || return 0
 
-  local all_paths=() seen=$'\n' batch=200 start=0 end i g first clauses p
+  local seen=$'\n' batch=200 start=0 end i g first clauses p
   while [ "$start" -lt "$n" ]; do
     end=$(( start + batch )); [ "$end" -gt "$n" ] && end=$n
     clauses=(); first=1
     for (( i = start; i < end; i++ )); do
       # find's own coarse prefilter: lowercase, each run of non-alphanumeric chars -> '*', no
       # leading '*' so a basename must literally start with the id. Never the authority — every
-      # candidate still goes through the exact canon() check below.
+      # candidate still goes through the exact canon() check in resolve_task_ids.
       g=$(printf '%s' "${ids[i]}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '*')
       if [ "$first" = 1 ]; then clauses+=(-iname "$g*.md"); first=0
       else clauses+=(-o -iname "$g*.md"); fi
@@ -5964,12 +5993,29 @@ resolve_task_ids() {
     # ids) so one real file is never counted as two matches for the same id.
     while IFS= read -r -d '' p; do
       case "$seen" in *$'\n'"$p"$'\n'*) continue ;; esac
-      all_paths+=("$p"); seen="${seen}${p}"$'\n'
+      printf '%s\0' "$p"; seen="${seen}${p}"$'\n'
     done < <(
       find "$COORD_ROOT" -type f -not -path '*/.git/*' \( "${clauses[@]}" \) -print0 2>/dev/null
     )
     start=$end
   done
+}
+
+# resolve_task_ids: reads raw ids on stdin, one per line; for each, in the SAME order, prints
+# one TSV line: <id>\t<ok|missing|ambiguous>\t<path1>[\x1f<path2>...]. The whole candidate set is
+# unioned before any id's own canon() check runs, so candidate_paths' batching stays exactly
+# equivalent to resolving one id at a time. A caller that has already enumerated that set (it is
+# the same set, by construction) passes it after a `--`, instead of paying for the search twice —
+# the marker, not the argument count, is what says so, so a set that is legitimately empty is
+# honoured as empty rather than re-searched for.
+resolve_task_ids() {
+  local ids=() id
+  while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done
+  [ "${#ids[@]}" -gt 0 ] || return 0
+
+  local all_paths=() p i
+  if [ "${1:-}" = -- ]; then shift; all_paths=("$@")
+  else while IFS= read -r -d '' p; do all_paths+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths); fi
 
   local all_cbase=() base
   for p in "${all_paths[@]+"${all_paths[@]}"}"; do
@@ -6058,22 +6104,199 @@ fmt_task_finding() {
   esac
 }
 
+# --- validate-tasks progress (ISSUE 077) ---------------------------------------------------
+# Progress goes to fd 4 — kaizero.sh's display descriptor, the one still pointing at the terminal
+# when its normal output is redirected. Both of this script's own streams are folded into the
+# callers' command substitution, so a byte written there would come back as a finding. A zero.sh
+# run by hand has no fd 4 at all: the probe in prog_start leaves the display off rather than failing.
+PROG_CELLS=30                              # bar width; fits label + bar + count inside 80 columns
+PROG_LABEL='Validating task definitions'
+PROG_DELAY_DEFAULT=2                       # KAIZERO_PROGRESS_DELAY default; see prog_start
+# prog_start TOTAL STARTED — open a report over TOTAL ids, whose step began at STARTED on the
+# shell's own clock. fd 4's terminal-ness alone picks the mode: a
+# redrawing bar where someone is watching, plain lines where nothing is. Colour capability is a
+# separate question, answered by kaizero.sh's own gate (KAIZERO_COLOR) and governing styling only,
+# so NO_COLOR or a non-UTF-8 locale still gets a bar, in ASCII, rather than a demotion to lines.
+prog_start() {
+  PROG_TOTAL=$1; PROG_N=0; PROG_COUNT=0; PROG_BUCKET=-1; PROG_CELL=-1; PROG_DRAWN=0; PROG_STEP=0
+  PROG_T0=$2                               # whole seconds: the finest interval bash 3.2 and both
+                                           # platforms' `date` can portably agree on, read from the
+                                           # shell's own clock so the threshold costs no fork per id
+  # KAIZERO_PROGRESS_DELAY overrides the draw threshold below; a plain count of seconds only, and
+  # 0 to draw from the first tick. A value this script cannot use degrades to the default INSTEAD of
+  # complaining: both of zero.sh's own streams are folded into its callers' command substitution and
+  # read back as findings, so a warning written there would fail the very walk it comments on, and
+  # an unvalidated value would reach `[ $(( ... )) -ge ]` as a syntax error on the same two streams.
+  case "${KAIZERO_PROGRESS_DELAY:-}" in
+    '' | *[!0-9]* ) PROG_DELAY=$PROG_DELAY_DEFAULT ;;
+    * )             PROG_DELAY=$KAIZERO_PROGRESS_DELAY ;;
+  esac
+  PROG_MODE=off
+  if { : >&4; } 2>/dev/null; then
+    if [ -t 4 ]; then PROG_MODE=bar; PROG_STEP=12; else PROG_MODE=plain; PROG_STEP=25; fi
+  fi
+  if [ "${KAIZERO_COLOR:-0}" = 1 ]; then
+    # PROG_OFF resets BEFORE dimming: `\033[2m` only adds the dim attribute, it does not clear the
+    # truecolour foreground PROG_ON set, so a terminal that drops or normalises SGR 2 — tmux among
+    # them — would draw the unfilled cells in the same blue as the filled ones and the bar would read
+    # as full from its first frame, with only the count moving. Resetting first leaves the two halves
+    # differing in foreground colour, which no terminal can flatten, and keeps the dim on top for the
+    # ones that do honour it.
+    PROG_FILL='─'; PROG_SNOW='❄ '; PROG_ON=$'\033[38;2;74;201;243m'; PROG_OFF=$'\033[0m\033[2m'; PROG_RESET=$'\033[0m'
+  else
+    PROG_FILL='-'; PROG_SNOW=''; PROG_ON=''; PROG_OFF=''; PROG_RESET=''
+  fi
+  # a log is a record of what ran, so the opening line is unconditional there — the draw threshold
+  # exists to stop a bar flickering on a screen, and a line cannot flicker.
+  if [ "$PROG_MODE" = plain ]; then PROG_BUCKET=0; prog_line; fi
+}
+# $1 repeats of the fill glyph, into $PROG_PAD. Built in-shell, without a subshell: `tr` cannot
+# portably map one byte to a multi-byte one, and a frame redraws often enough to be worth no forks.
+prog_fill() { printf -v PROG_PAD "%${1}s" ''; PROG_PAD="${PROG_PAD// /$PROG_FILL}"; }
+# one plain line — same label and count as the bar, no bar and no escape sequences.
+# `|| true` on every write: the display is cosmetic, and a descriptor that has gone away must never
+# turn into an aborted walk under `set -e`.
+prog_line() { printf '%s%s %*s/%s\n' "$PROG_SNOW" "$PROG_LABEL" "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4 || true; }
+# one bar frame, $1 cells filled. Label and count are padded to constant widths, so the bar's left
+# edge and the line's total length never move between frames.
+prog_frame() {
+  local on off
+  prog_fill "$1"; on=$PROG_PAD
+  prog_fill $(( PROG_CELLS - $1 )); off=$PROG_PAD
+  printf '\r%s%s %s%s%s%s%s %*s/%s\033[K' "$PROG_SNOW" "$PROG_LABEL" \
+    "$PROG_ON" "$on" "$PROG_OFF" "$off" "$PROG_RESET" \
+    "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4 || true
+}
+# one id resolved. The bar advances per fill position (30 of them), the count only when completion
+# crosses a percentage step — so on any backlog past about ten ids the bar is the faster of the two.
+prog_tick() {
+  [ "$PROG_MODE" = off ] && return 0
+  PROG_N=$((PROG_N+1))
+  local pct=$(( PROG_N * 100 / PROG_TOTAL )) bucket cell
+  bucket=$(( pct / PROG_STEP ))
+  if [ "$PROG_MODE" = plain ]; then
+    # one line per step crossed, not per tick: a backlog small enough to cross two steps in one
+    # tick still writes the same set of lines a large one does, so the log's shape never depends
+    # on the number of ids.
+    while [ "$PROG_BUCKET" -lt "$bucket" ]; do
+      PROG_BUCKET=$(( PROG_BUCKET + 1 )); PROG_COUNT=$PROG_N; prog_line
+    done
+    return 0
+  fi
+  # the bar's own count latches instead: the line is redrawn per fill position anyway, so an
+  # intermediate step that a single tick jumped over has no frame of its own to appear on.
+  if [ "$bucket" -gt "$PROG_BUCKET" ]; then PROG_BUCKET=$bucket; PROG_COUNT=$PROG_N; fi
+  # draw nothing until the step has outlived a second: below that a bar appears and clears inside a
+  # frame or two, which reads worse than silence. Elapsed time, never an id index — a fixed fraction
+  # of the ids lands near a second on a big backlog and near a hundredth on a small one.
+  # The two clock reads are floored whole seconds, so their difference first reaches 1 the moment a
+  # boundary is crossed — which can be a millisecond in. Requiring 2 is what makes "under a second
+  # draws nothing" hold for every walk rather than most: it puts the real threshold between one and
+  # two seconds, the whole-second imprecision this script's portability floor already accepts.
+  if [ "$PROG_DRAWN" = 0 ]; then
+    [ $(( SECONDS - PROG_T0 )) -ge "$PROG_DELAY" ] || return 0
+    PROG_DRAWN=1                           # opens at whatever position the walk has already reached
+  fi
+  cell=$(( PROG_N * PROG_CELLS / PROG_TOTAL ))
+  if [ "$cell" != "$PROG_CELL" ]; then PROG_CELL=$cell; prog_frame "$cell"; fi
+  return 0
+}
+# close the report: one last frame carrying the true total rather than wherever the count's cadence
+# stopped, then erase the line so a finished step leaves no residue. A walk that drew nothing closes
+# nothing — that closing frame would be exactly the single-frame flash the threshold prevents.
+prog_end() {
+  [ "$PROG_MODE" = bar ] && [ "$PROG_DRAWN" = 1 ] || return 0
+  PROG_COUNT=$PROG_TOTAL; prog_frame "$PROG_CELLS"
+  printf '\r\033[K' >&4 || true
+}
+
+# task-definition cache (ISSUE 077): the walk below is the largest pre-launch cost and repeats
+# identically between sessions. It is keyed on a filesystem signature, never on a commit — Task
+# files may be gitignored or carry uncommitted edits, and both must keep invalidating it, which is
+# the whole reason this step was uncached. The signature is a digest of the sorted candidate paths,
+# which changes when one is added, deleted or renamed (a rename leaves the inode's timestamp
+# untouched, so timestamps alone are blind to it), plus the unchecked ids the walk was asked about —
+# git-derived by construction, since they come off COORD_BASE's own Todo List, so a peer's
+# uncommitted edit to its copy is not a change to the list this fleet coordinates on. Content edits
+# are caught separately, by `test -nt` against the cache file's own mtime — which leaves one gap the
+# digest cannot close: a restore that puts an older file back with its old mtime intact (`cp -p`,
+# `tar -x`, `rsync -a`) changes neither half. `git checkout` bumps the mtime, so the common case is
+# caught. It is one code path on both
+# platforms, needing neither `stat`'s format flags nor `find`'s printing predicate. The file lives
+# in the coordination git directory — untracked, and excluded from candidate_paths' own `find`, so
+# writing it can never invalidate the verdict it just stored.
+task_cache_file() {
+  local key
+  key=$(printf '%s\x1e%s\n' "$COORD_BASE" "$TODO_PATH" | cksum | awk '{print $1}')
+  printf '%s/task-defs-ok-%s' "$COORD_GITDIR" "$key"
+}
+
 # validate-tasks: exit 0 = clean, nothing printed; exit 1 = at least one unresolved unchecked id,
 # on stderr, one line per finding via fmt_task_finding, capped at the first 5 in walk order plus
 # a trailing "… and N more" past that. Separate from validate_ids on purpose: each
-# keeps its own exit code and finding vocabulary. No cache — find reads the real filesystem so a
-# gitignored Task directory stays resolvable, and an uncommitted edit must be caught every run.
+# keeps its own exit code and finding vocabulary. Only a clean verdict is cached, the rule
+# validate_ids already follows — a run with findings proves nothing about a later one, so a backlog
+# with an unfixed finding walks (and reports progress) every time until it is fixed.
 validate_tasks() {
-  local id id2 cls paths findings=() total cap=5 shown i ids=()
+  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile tmp started sig p hit=0
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
   if [ "${#ids[@]}" -gt 0 ]; then
-    while IFS=$'\t' read -r id2 cls paths; do
-      case "$cls" in
-        missing)   findings+=("missing-task-file"$'\t'"$id2") ;;
-        ambiguous) findings+=("ambiguous-task-file"$'\t'"$id2"$'\t'"$paths") ;;
-        ok)        check_ac_file "$paths" || findings+=("empty-acceptance-criteria"$'\t'"$id2"$'\t'"$paths") ;;
-      esac
-    done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids)
+    cachefile=$(task_cache_file)
+    started=$SECONDS                       # the step's own start, before its first file search —
+                                           # the display's threshold is measured from here
+    while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
+    sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e%s\n' "${#cands[@]}"; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
+    # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
+    if [ -n "$sig" ] && [ -f "$cachefile" ] && [ "$(cat "$cachefile" 2>/dev/null || true)" = "$sig" ]; then
+      hit=1
+      # the comparison is deliberately the conservative way round — the stored verdict must be
+      # STRICTLY newer than every candidate, rather than no candidate being strictly newer than it.
+      # bash 3.2's `-nt` compares whole seconds, so the two readings differ for a file written in
+      # the same second as the stamp: the loose one would accept that edit forever, this one pays
+      # for one more walk and gets it right, and the walk after that stamps a later second and hits.
+      for p in "${cands[@]+"${cands[@]}"}"; do
+        if ! [ "$cachefile" -nt "$p" ]; then hit=0; break; fi
+      done
+    fi
+    if [ "$hit" = 0 ]; then
+      # the verdict is written now, BEFORE the walk reads a single Task file, and only renamed into
+      # place once the walk comes back clean — `mv` inside one directory is a rename, which leaves
+      # the mtime alone, so the stored verdict carries the moment the walk began rather than the
+      # moment it ended. A Task file edited while the walk was running is therefore newer than the
+      # verdict that walk stored, instead of hiding behind it forever. A git directory this run
+      # cannot write to costs the cache, never the verdict: `tmp` stays empty and nothing is stored.
+      # 2> comes first — redirections apply left to right, and a failing one reports on whatever
+      # stderr is by then, which the callers fold into the findings they capture.
+      tmp="$cachefile.tmp.$$"
+      [ -n "$sig" ] && { printf '%s\n' "$sig" 2>/dev/null > "$tmp" || tmp=''; } || tmp=''
+      # the path is baked into the trap body rather than read back from $tmp when it fires: that is
+      # a local, and a trap running after the function has returned would find it unset — which
+      # under `set -u` aborts the trap itself, onto that same captured stderr. INT and TERM keep
+      # their default action, which this script has always relied on.
+      # shellcheck disable=SC2064  # expanding now is the point: see the note above
+      [ -n "$tmp" ] && trap "rm -f $(printf '%q' "$tmp") 2>/dev/null || true" EXIT
+      prog_start "${#ids[@]}" "$started"
+      # the candidate set is handed over rather than enumerated a second time: the signature above
+      # already paid for that `find`, and this is the path the cache exists to make cheaper.
+      while IFS=$'\t' read -r id2 cls paths; do
+        case "$cls" in
+          missing)   findings+=("missing-task-file"$'\t'"$id2") ;;
+          ambiguous) findings+=("ambiguous-task-file"$'\t'"$id2"$'\t'"$paths") ;;
+          ok)        check_ac_file "$paths" || findings+=("empty-acceptance-criteria"$'\t'"$id2"$'\t'"$paths") ;;
+        esac
+        prog_tick
+      done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids -- "${cands[@]+"${cands[@]}"}")
+      prog_end
+      # the temp name carries $$: a fleet lands here in the same second, and a shared name would let
+      # one instance win the rename while the losers' `mv` finds nothing. Publishing is `mv` alone —
+      # atomic, so a reader without the lock sees the old verdict or the new one, never a half file.
+      # stderr muted: a failed cache write must not surface as a Task definition finding.
+      if [ -n "$tmp" ]; then
+        if [ "${#findings[@]}" = 0 ]; then mv -f "$tmp" "$cachefile" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+        else rm -f "$tmp" 2>/dev/null || true; fi
+        trap - EXIT
+      fi
+    fi
   fi
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap
@@ -6245,6 +6468,7 @@ Keep these facts in mind:
       criterion, add one evidence line explaining why the criterion is satisfied:
       > YYYY-MM-DD HH:MM±HHMM <short evidence>
       and commit that checkoff: `@@ZERO_SH@@ commit_ac_checkoff task_id`.
+      Take every timestamp from the shell clock: run `date "+%Y-%m-%d %H:%M%z"` in the same Bash call that writes the line, and run it again each time you rewrite a note.
       ACCEPTANCE CRITERIA GATE — hand your diff to a subagent that answers two questions separately:
       (1) is every Acceptance Criterion ticked? (2) is every ticked criterion has evidence line and
       really passing (don't run tests, static code analysis only)?
@@ -6443,6 +6667,7 @@ Keep these facts in mind:
       criterion, add one evidence line explaining why the criterion is satisfied:
       > YYYY-MM-DD HH:MM±HHMM <short evidence>
       and commit that checkoff: `@@ZERO_SH@@ commit_ac_checkoff task_id`.
+      Take every timestamp from the shell clock: run `date "+%Y-%m-%d %H:%M%z"` in the same Bash call that writes the line, and run it again each time you rewrite a note.
       ACCEPTANCE CRITERIA GATE — hand your diff to a subagent that answers two questions separately:
       (1) is every Acceptance Criterion ticked? (2) is every ticked criterion has evidence line and
       really passing (don't run tests, static code analysis only)?

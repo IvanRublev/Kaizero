@@ -481,4 +481,46 @@ command -v timeout >/dev/null 2>&1 || fail "timeout not found on PATH — networ
 timeout 2 true || fail "timeout 2 true did not succeed (want exit 0 well inside the 2s budget)"
 ok "timeout present and runnable"
 
+# 22. validate_tasks' cache signature (ISSUE 077): the two calls the signature is built from, in
+# the exact forms it uses them. Deliberately neither `stat`'s format flags nor `find`'s printing
+# predicate — one is spelled differently on the two platforms and the other is missing from macOS —
+# so this proves the single code path behaves the same on both.
+sigdir="$tmp/sig"; mkdir -p "$sigdir"
+: > "$sigdir/A.md"; : > "$sigdir/B.md"; stampf="$tmp/sig-written"; : > "$stampf"
+sleep 1                                        # one whole second separates everything written above
+cache="$tmp/sig-cache"; : > "$cache"
+# 22a. `test -nt` against the cache file's own timestamp, in the direction the cache reads it: the
+# stored verdict counts as usable only while it is STRICTLY newer than the candidate.
+[ "$cache" -nt "$sigdir/A.md" ] || fail "test -nt did not call the cache file newer than a candidate written before it"
+sleep 1; : > "$sigdir/A.md"                    # content edit, same name, same inode
+[ "$cache" -nt "$sigdir/A.md" ] && fail "test -nt still called the cache file newer than a candidate touched after it"
+ok "test -nt: the cache file outranks a candidate written before it, and not one touched after it"
+# 22b. `mv` inside one directory — the cache file is written before the walk and only renamed into
+# place after it, so the stored verdict must come out carrying the mtime it was written with, not
+# the moment of the rename. A Task file edited while the walk ran then still reads as newer than it.
+mv "$stampf" "$tmp/sig-published" || fail "mv within one directory failed"
+: > "$sigdir/B.md"                              # a candidate edited while the "walk" was running
+[ "$sigdir/B.md" -nt "$tmp/sig-published" ] || fail "mv carried the rename's own time onto the file instead of preserving its mtime"
+ok "mv preserves the mtime a verdict was written with, so a mid-walk edit still outranks it"
+# 22c. the sorted-filename digest: `LC_ALL=C sort | cksum`, the half that catches an added,
+# removed or renamed candidate — a rename leaves both the timestamp and the file count alone.
+# enumerated exactly as candidate_paths does it — `find -type f -not -path '*/.git/*' \( -iname
+# … \) -print0` read back with `read -r -d ''` — then digested exactly as the signature does.
+namedigest() {
+  local p cands=()
+  while IFS= read -r -d '' p; do cands+=("$p"); done < <(
+    find "$sigdir" -type f -not -path '*/.git/*' \( -iname 'a*.md' -o -iname 'b*.md' -o -iname 'c*.md' -o -iname 'z*.md' \) -print0 2>/dev/null
+  )
+  printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort | cksum | awk '{print $1}'
+}
+d0="$(namedigest)"
+case "$d0" in ''|*[!0-9]*) fail "find|sort|cksum digest produced '$d0'" ;; esac
+[ "$(namedigest)" = "$d0" ] || fail "find|sort|cksum digest is not stable across two identical calls"
+: > "$sigdir/C.md";           d_add="$(namedigest)"
+[ "$d_add" != "$d0" ] || fail "digest unchanged after adding a candidate"
+rm -f "$sigdir/C.md";         [ "$(namedigest)" = "$d0" ] || fail "digest did not return to its value after removing the added candidate"
+mv "$sigdir/B.md" "$sigdir/Z.md"; d_ren="$(namedigest)"
+[ "$d_ren" != "$d0" ] || fail "digest unchanged after renaming a candidate (same count, same timestamps)"
+ok "find|sort|cksum filename digest changes on add, remove and rename, and is stable otherwise"
+
 echo "SMOKE PASS ($(uname -s), bash $BASH_VERSION)"
