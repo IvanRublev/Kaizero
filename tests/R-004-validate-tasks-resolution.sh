@@ -12,7 +12,8 @@ SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # - Tools beyond the shared prerequisites: none
 # - Folder under $TESTROOT: $TESTROOT/R-004-validate-tasks-resolution
 # - Wall-clock budget: seconds — no Run command of this scenario wraps itself in timeout
-#   (shares its launch-gate/cache shape by contrast — validate-tasks caches nothing)
+#   (shares its launch-gate/cache shape by contrast — validate-tasks keys its cache on the
+#   filesystem, not on a commit; see ISSUE-077-task-cache-and-progress.sh)
 #
 # zero.sh validate-tasks is a new sibling of validate-ids: for every unchecked id
 # on the Release Todo List's own tail, it resolves the Task file by id and checks it for a
