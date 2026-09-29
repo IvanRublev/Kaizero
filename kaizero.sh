@@ -6216,7 +6216,7 @@ validate_tasks() {
     started=$SECONDS                       # the step's own start, before its first file search —
                                            # the display's threshold is measured from here
     while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
-    sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e\n'; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
+    sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e%s\n' "${#cands[@]}"; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
     # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
     if [ -n "$sig" ] && [ -f "$cachefile" ] && [ "$(cat "$cachefile" 2>/dev/null || true)" = "$sig" ]; then
       hit=1
@@ -6263,7 +6263,7 @@ validate_tasks() {
       # atomic, so a reader without the lock sees the old verdict or the new one, never a half file.
       # stderr muted: a failed cache write must not surface as a Task definition finding.
       if [ -n "$tmp" ]; then
-        if [ "${#findings[@]}" = 0 ]; then mv -f "$tmp" "$cachefile" 2>/dev/null || true
+        if [ "${#findings[@]}" = 0 ]; then mv -f "$tmp" "$cachefile" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
         else rm -f "$tmp" 2>/dev/null || true; fi
         trap - EXIT
       fi
