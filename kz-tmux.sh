@@ -60,7 +60,7 @@ if [ "${#VERBOSE[@]}" -gt 0 ]; then
   mkdir -p "$LOG_DIR"
 fi
 
-STOP_ALL_STATUS='#[fg=green]Ctrl-b Ctrl-c: sends stop signal to all panes (Ctrl-c is repeatable within 5s)#[default]'
+STOP_ALL_STATUS='Ctrl-b Ctrl-c: sends stop signal to all panes (Ctrl-c is repeatable within 5s)'
 
 (cd "$LOG_DIR" && tmux "${VERBOSE[@]}" new-session -d -s "$SESSION" -n "kz" -c "$ORIG_PWD" "$CMD" \; \
   set-option -t "$SESSION" mouse on \; \
@@ -85,7 +85,7 @@ fi
     i=$((i + 1))
     # pause after every 2nd pane (batch size 2), until the last batch has opened
     if [ "$WAIT_SEC" -gt 0 ] && [ $((launched % 2)) -eq 0 ] && [ "$launched" -lt "$COUNT" ]; then
-      tmux set-option -t "$SESSION" status-right "#[fg=grey]Launching $launched of $COUNT instances...#[default]"
+      tmux set-option -t "$SESSION" status-right "#[fg=black,bg=colour244]Launching $launched of $COUNT instances...#[default]"
       sleep "$WAIT_SEC"
     fi
   done
