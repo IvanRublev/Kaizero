@@ -486,8 +486,9 @@ ok "timeout present and runnable"
 # predicate — one is spelled differently on the two platforms and the other is missing from macOS —
 # so this proves the single code path behaves the same on both.
 sigdir="$tmp/sig"; mkdir -p "$sigdir"
-: > "$sigdir/A.md"; : > "$sigdir/B.md"
-cache="$tmp/sig-cache"; sleep 1; : > "$cache"
+: > "$sigdir/A.md"; : > "$sigdir/B.md"; stampf="$tmp/sig-stamp"; : > "$stampf"
+sleep 1                                        # one whole second separates everything written above
+cache="$tmp/sig-cache"; : > "$cache"
 # 22a. `test -nt` against the cache file's own timestamp, in the direction the cache reads it: the
 # stored verdict counts as usable only while it is STRICTLY newer than the candidate.
 [ "$cache" -nt "$sigdir/A.md" ] || fail "test -nt did not call the cache file newer than a candidate written before it"
@@ -496,7 +497,7 @@ sleep 1; : > "$sigdir/A.md"                    # content edit, same name, same i
 ok "test -nt: the cache file outranks a candidate written before it, and not one touched after it"
 # 22b. `touch -r REF FILE` — the cache file is stamped with the moment the walk STARTED, not the
 # moment it ended, so a Task file edited while the walk was running still reads as newer than it.
-stampf="$tmp/sig-stamp"; : > "$stampf"; sleep 1; : > "$sigdir/B.md"; sleep 1
+: > "$sigdir/B.md"                              # a candidate edited after the stamp was taken
 fresh="$tmp/sig-fresh"; : > "$fresh"
 touch -r "$stampf" "$fresh" || fail "touch -r REF FILE failed"
 [ "$sigdir/B.md" -nt "$fresh" ] || fail "touch -r did not carry the reference file's older timestamp onto the new one"

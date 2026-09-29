@@ -276,7 +276,9 @@ vt s2; check "I77-12 a file touched mid-walk would invalidate" "$(walked s2)" "y
 # and the reused verdict is measurably cheaper than the walk it replaces, not merely equal
 T2=$(date +%s); vt s3; T3=$(date +%s)
 check "I77-12 the reused verdict skipped the walk"  "$(walked s3)" "no"
-check "I77-12 and came back faster than the walk"   "$([ $(( T3 - T2 )) -lt $(( T1 - T0 )) ] && echo yes || echo NO)" "yes"
+# by a margin, not by a hair: a hit still pays for its own file search, and two whole-second spans
+# can truncate to the same value when the difference is small
+check "I77-12 and came back faster than the walk"   "$([ $(( (T3 - T2) + 2 )) -le $(( T1 - T0 )) ] && echo yes || echo NO)" "yes"
 # I77-12 PASS — the invalidation window closes at the walk's first read, not at its last, so a peer
 # editing a Task file while this instance walks can never be cached over.
 
