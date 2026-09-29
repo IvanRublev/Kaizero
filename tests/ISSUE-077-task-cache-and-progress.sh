@@ -148,11 +148,12 @@ check "I77-7 every line carries the label" "$(grep -c '^Validating task definiti
 check "I77-7 last line names the true total" "$(tail -1 "$TR/p1.fd4" | grep -c ' 40/40$')" "1"
 check "I77-7 no escape sequence" "$(LC_ALL=C grep -c "$(printf '\033')" "$TR/p1.fd4")" "0"
 check "I77-7 no elapsed or remaining time" "$(grep -cE '[0-9]+(s|m|:[0-9])' "$TR/p1.fd4")" "0"
-# a sub-second walk still writes them: a line cannot flicker, and a silent log loses the evidence
-# that the step ran at all
+# a sub-second walk still writes them, and a backlog small enough to cross two quarters in one tick
+# still writes the same five: a line cannot flicker, and a silent log loses the evidence that the
+# step ran at all
 newrepo c7b 3
 vt p2; check "I77-7 sub-second walk still writes its lines" "$(walked p2)" "yes"
-check "I77-7 sub-second line count" "$(wc -l < "$TR/p2.fd4" | tr -d ' ')" "4"
+check "I77-7 sub-second line count" "$(wc -l < "$TR/p2.fd4" | tr -d ' ')" "5"
 # I77-7 PASS — the threshold governs the redrawing bar only; plain lines are a record of the run.
 
 # I77-8 — bar mode: a terminal on the display descriptor, a walk long enough to outlive the threshold
@@ -180,6 +181,7 @@ mid = plain[len(plain) // 2] if plain else ''
 body = re.sub(r'\s*\d+/\d+\s*$', '', mid.split('definitions ', 1)[-1]).strip() if plain else ''
 print('frames=%d' % len(frames))
 print('counts=%d' % len(counts))
+print('latched=%d' % len(set(re.search(r'(\d+)/(\d+)\s*$', p).group(0) for p in plain[:-1] if re.search(r'(\d+)/(\d+)\s*$', p))))
 print('cells=%d' % len(body))
 print('glyphs=%d' % len(set(body)))
 print('width=%d' % len(mid.rstrip()))
@@ -197,7 +199,8 @@ check "I77-8 more than one frame drawn" "$([ "$(st frames b1)" -ge 2 ] && echo y
 check "I77-8 at most 32 frames" "$([ "$(st frames b1)" -le 32 ] && echo yes || echo NO)" "yes"
 # the count is latched to a 12-percent step: at most 9 distinct values over the walk, plus the true
 # total on the closing frame
-check "I77-8 at most 10 distinct counts" "$([ "$(st counts b1)" -le 10 ] && echo yes || echo NO)" "yes"
+# nine latched values at a 12-percent step, and the closing frame's true total on top of them
+check "I77-8 at most 9 latched counts" "$([ "$(st latched b1)" -le 9 ] && echo yes || echo NO)" "yes"
 check "I77-8 the bar is the faster of the two" "$([ "$(st frames b1)" -gt "$(st counts b1)" ] && echo yes || echo NO)" "yes"
 check "I77-8 thirty fill cells" "$(st cells b1)" "30"
 check "I77-8 a single glyph throughout" "$(st glyphs b1)" "1"
@@ -230,6 +233,22 @@ for col in 1 0; do
 done
 # I77-10 PASS — below the threshold a bar would appear and clear inside a frame or two, so neither
 # an opening frame nor a closing one is drawn.
+
+# I77-12 — the stored verdict is stamped with the moment the walk STARTED, not the moment it ended,
+# so a Task file edited while a multi-second walk was running is still newer than it
+newrepo c12 160
+MT=(stat -c %Y); stat -c %Y . >/dev/null 2>&1 || MT=(stat -f %m)
+T0=$(date +%s); vt s1; T1=$(date +%s)
+CS="$D/.git/$(ls "$D/.git/" | grep '^task-defs-ok-')"
+CM=$("${MT[@]}" "$CS")
+check "I77-12 the walk really took several seconds" "$([ $(( T1 - T0 )) -ge 3 ] && echo yes || echo NO)" "yes"
+# stamped before the candidate files were read, so the whole reading window is still "newer"
+check "I77-12 the cache is stamped before the walk ended" "$([ $(( T1 - CM )) -ge 2 ] && echo yes || echo NO)" "yes"
+# a file touched at any point after that stamp — which includes the whole walk — invalidates
+touch tasks/TASK-77.md
+vt s2; check "I77-12 a file touched mid-walk would invalidate" "$(walked s2)" "yes"
+# I77-12 PASS — the invalidation window closes at the walk's first read, not at its last, so a peer
+# editing a Task file while this instance walks can never be cached over.
 
 # I77-11 — the restart cadence and the network-flap backoff that multiplies it
 check "I77-11 default restart wait is 2 seconds" \

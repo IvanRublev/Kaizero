@@ -5981,14 +5981,16 @@ candidate_paths() {
 # resolve_task_ids: reads raw ids on stdin, one per line; for each, in the SAME order, prints
 # one TSV line: <id>\t<ok|missing|ambiguous>\t<path1>[\x1f<path2>...]. The whole candidate set is
 # unioned before any id's own canon() check runs, so candidate_paths' batching stays exactly
-# equivalent to resolving one id at a time.
+# equivalent to resolving one id at a time. A caller that has already enumerated that set (it is
+# the same set, by construction) passes it as arguments instead of paying for the search twice.
 resolve_task_ids() {
   local ids=() id
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done
   [ "${#ids[@]}" -gt 0 ] || return 0
 
   local all_paths=() p i
-  while IFS= read -r -d '' p; do all_paths+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
+  if [ "$#" -gt 0 ]; then all_paths=("$@")
+  else while IFS= read -r -d '' p; do all_paths+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths); fi
 
   local all_cbase=() base
   for p in "${all_paths[@]+"${all_paths[@]}"}"; do
@@ -6090,8 +6092,9 @@ PROG_LABEL='Validating task definitions'
 # so NO_COLOR or a non-UTF-8 locale still gets a bar, in ASCII, rather than a demotion to lines.
 prog_start() {
   PROG_TOTAL=$1; PROG_N=0; PROG_COUNT=0; PROG_BUCKET=-1; PROG_CELL=-1; PROG_DRAWN=0; PROG_STEP=25
-  PROG_T0=$(date +%s)                      # whole seconds: the finest interval bash 3.2 and both
-                                           # platforms' `date` can portably agree on
+  PROG_T0=$SECONDS                         # whole seconds: the finest interval bash 3.2 and both
+                                           # platforms' `date` can portably agree on, read from the
+                                           # shell's own clock so the threshold costs no fork per id
   PROG_MODE=off
   if { : >&4; } 2>/dev/null; then
     if [ -t 4 ]; then PROG_MODE=bar; PROG_STEP=12; else PROG_MODE=plain; fi
@@ -6105,15 +6108,19 @@ prog_start() {
   # exists to stop a bar flickering on a screen, and a line cannot flicker.
   if [ "$PROG_MODE" = plain ]; then PROG_BUCKET=0; prog_line; fi
 }
-# N repeats of the fill glyph, built in-shell: `tr` cannot portably map one byte to a multi-byte one.
-prog_fill() { local n=$1 s='' i=0; while [ "$i" -lt "$n" ]; do s="$s$PROG_FILL"; i=$((i+1)); done; printf '%s' "$s"; }
+# $1 repeats of the fill glyph, into $PROG_PAD. Built in-shell, without a subshell: `tr` cannot
+# portably map one byte to a multi-byte one, and a frame redraws often enough to be worth no forks.
+prog_fill() { printf -v PROG_PAD "%${1}s" ''; PROG_PAD="${PROG_PAD// /$PROG_FILL}"; }
 # one plain line — same label and count as the bar, no bar and no escape sequences.
 prog_line() { printf '%s%s %*s/%s\n' "$PROG_SNOW" "$PROG_LABEL" "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4; }
 # one bar frame, $1 cells filled. Label and count are padded to constant widths, so the bar's left
 # edge and the line's total length never move between frames.
 prog_frame() {
+  local on off
+  prog_fill "$1"; on=$PROG_PAD
+  prog_fill $(( PROG_CELLS - $1 )); off=$PROG_PAD
   printf '\r%s%s %s%s%s%s%s %*s/%s\033[K' "$PROG_SNOW" "$PROG_LABEL" \
-    "$PROG_ON" "$(prog_fill "$1")" "$PROG_OFF" "$(prog_fill $(( PROG_CELLS - $1 )))" "$PROG_RESET" \
+    "$PROG_ON" "$on" "$PROG_OFF" "$off" "$PROG_RESET" \
     "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4
 }
 # one id resolved. The bar advances per fill position (30 of them), the count only when completion
@@ -6121,18 +6128,25 @@ prog_frame() {
 prog_tick() {
   [ "$PROG_MODE" = off ] && return 0
   PROG_N=$((PROG_N+1))
-  local pct=$(( PROG_N * 100 / PROG_TOTAL )) bucket cell crossed=0
+  local pct=$(( PROG_N * 100 / PROG_TOTAL )) bucket cell
   bucket=$(( pct / PROG_STEP ))
-  if [ "$bucket" -gt "$PROG_BUCKET" ]; then PROG_BUCKET=$bucket; PROG_COUNT=$PROG_N; crossed=1; fi
   if [ "$PROG_MODE" = plain ]; then
-    [ "$crossed" = 1 ] && prog_line
+    # one line per step crossed, not per tick: a backlog small enough to cross two steps in one
+    # tick still writes the same set of lines a large one does, so the log's shape never depends
+    # on the number of ids.
+    while [ "$PROG_BUCKET" -lt "$bucket" ]; do
+      PROG_BUCKET=$(( PROG_BUCKET + 1 )); PROG_COUNT=$PROG_N; prog_line
+    done
     return 0
   fi
+  # the bar's own count latches instead: the line is redrawn per fill position anyway, so an
+  # intermediate step that a single tick jumped over has no frame of its own to appear on.
+  if [ "$bucket" -gt "$PROG_BUCKET" ]; then PROG_BUCKET=$bucket; PROG_COUNT=$PROG_N; fi
   # draw nothing until the walk has outlived a second: below that a bar appears and clears inside a
   # frame or two, which reads worse than silence. Elapsed time, never an id index — a fixed fraction
   # of the ids lands near a second on a big backlog and near a hundredth on a small one.
   if [ "$PROG_DRAWN" = 0 ]; then
-    [ $(( $(date +%s) - PROG_T0 )) -ge 1 ] || return 0
+    [ $(( SECONDS - PROG_T0 )) -ge 1 ] || return 0
     PROG_DRAWN=1                           # opens at whatever position the walk has already reached
   fi
   cell=$(( PROG_N * PROG_CELLS / PROG_TOTAL ))
@@ -6173,10 +6187,15 @@ task_cache_file() {
 # validate_ids already follows — a run with findings proves nothing about a later one, so a backlog
 # with an unfixed finding walks (and reports progress) every time until it is fixed.
 validate_tasks() {
-  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile sig p hit=0
+  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile stamp sig p hit=0
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
   if [ "${#ids[@]}" -gt 0 ]; then
     cachefile=$(task_cache_file)
+    # the moment this run's view of the filesystem begins, captured BEFORE the candidate set is
+    # enumerated. The cache file is stamped with it rather than with the moment the walk finished,
+    # so an edit landing mid-walk — the walk is seconds long, and a peer may be editing throughout
+    # — is newer than the stored verdict and invalidates it, instead of hiding behind it forever.
+    stamp="$cachefile.stamp.$$"; : > "$stamp"
     while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
     sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e\n'; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' )
     # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
@@ -6188,6 +6207,8 @@ validate_tasks() {
     fi
     if [ "$hit" = 0 ]; then
       prog_start "${#ids[@]}"
+      # the candidate set is handed over rather than enumerated a second time: the signature above
+      # already paid for that `find`, and this is the path the cache exists to make cheaper.
       while IFS=$'\t' read -r id2 cls paths; do
         case "$cls" in
           missing)   findings+=("missing-task-file"$'\t'"$id2") ;;
@@ -6195,15 +6216,17 @@ validate_tasks() {
           ok)        check_ac_file "$paths" || findings+=("empty-acceptance-criteria"$'\t'"$id2"$'\t'"$paths") ;;
         esac
         prog_tick
-      done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids)
+      done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids "${cands[@]+"${cands[@]}"}")
       prog_end
       # temp name carries $$: a fleet lands here in the same second and a shared name would let one
       # instance win the rename while the losers' `mv` finds nothing. `|| true` on top — the cache is
       # an optimization, never a reason to fail a run.
       if [ "${#findings[@]}" = 0 ] && [ -n "$sig" ]; then
-        { printf '%s\n' "$sig" > "$cachefile.tmp.$$" && mv -f "$cachefile.tmp.$$" "$cachefile"; } || rm -f "$cachefile.tmp.$$" || true
+        { printf '%s\n' "$sig" > "$cachefile.tmp.$$" && touch -r "$stamp" "$cachefile.tmp.$$" \
+            && mv -f "$cachefile.tmp.$$" "$cachefile"; } || rm -f "$cachefile.tmp.$$" || true
       fi
     fi
+    rm -f "$stamp"
   fi
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap
