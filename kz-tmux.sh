@@ -73,21 +73,25 @@ STOP_ALL_STATUS='#[fg=green]Ctrl-b Ctrl-c: sends stop signal to all panes (Ctrl-
 if [ -z "${SSH_CONNECTION:-}" ]; then
   tmux set-hook -t "$SESSION" client-detached "kill-session -t $SESSION"
 fi
-launched=1
-i=2
-while [ "$i" -le "$COUNT" ]; do
-  tmux split-window -t "$SESSION" "$CMD"
-  tmux select-layout -t "$SESSION" tiled
-  launched=$((launched + 1))
-  i=$((i + 1))
-  # pause after every 2nd pane (batch size 2), until the last batch has opened
-  if [ "$WAIT_SEC" -gt 0 ] && [ $((launched % 2)) -eq 0 ] && [ "$launched" -lt "$COUNT" ]; then
-    tmux set-option -t "$SESSION" status-right "#[fg=grey]Launching $launched of $COUNT instances...#[default]"
-    sleep "$WAIT_SEC"
+# Split in the background so the client attaches immediately and the panes
+# become visible as each batch opens, instead of after the last one.
+{
+  launched=1
+  i=2
+  while [ "$i" -le "$COUNT" ]; do
+    tmux split-window -t "$SESSION" "$CMD"
+    tmux select-layout -t "$SESSION" tiled
+    launched=$((launched + 1))
+    i=$((i + 1))
+    # pause after every 2nd pane (batch size 2), until the last batch has opened
+    if [ "$WAIT_SEC" -gt 0 ] && [ $((launched % 2)) -eq 0 ] && [ "$launched" -lt "$COUNT" ]; then
+      tmux set-option -t "$SESSION" status-right "#[fg=grey]Launching $launched of $COUNT instances...#[default]"
+      sleep "$WAIT_SEC"
+    fi
+  done
+  if [ "$WAIT_SEC" -gt 0 ]; then
+    tmux set-option -t "$SESSION" status-right "$STOP_ALL_STATUS"
   fi
-done
-if [ "$WAIT_SEC" -gt 0 ]; then
-  tmux set-option -t "$SESSION" status-right "$STOP_ALL_STATUS"
-fi
+} &
 
 (cd "$LOG_DIR" && tmux "${VERBOSE[@]}" attach -t "$SESSION")
