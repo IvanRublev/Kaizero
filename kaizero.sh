@@ -6114,7 +6114,9 @@ prog_start() {
 # portably map one byte to a multi-byte one, and a frame redraws often enough to be worth no forks.
 prog_fill() { printf -v PROG_PAD "%${1}s" ''; PROG_PAD="${PROG_PAD// /$PROG_FILL}"; }
 # one plain line — same label and count as the bar, no bar and no escape sequences.
-prog_line() { printf '%s%s %*s/%s\n' "$PROG_SNOW" "$PROG_LABEL" "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4; }
+# `|| true` on every write: the display is cosmetic, and a descriptor that has gone away must never
+# turn into an aborted walk under `set -e`.
+prog_line() { printf '%s%s %*s/%s\n' "$PROG_SNOW" "$PROG_LABEL" "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4 || true; }
 # one bar frame, $1 cells filled. Label and count are padded to constant widths, so the bar's left
 # edge and the line's total length never move between frames.
 prog_frame() {
@@ -6123,7 +6125,7 @@ prog_frame() {
   prog_fill $(( PROG_CELLS - $1 )); off=$PROG_PAD
   printf '\r%s%s %s%s%s%s%s %*s/%s\033[K' "$PROG_SNOW" "$PROG_LABEL" \
     "$PROG_ON" "$on" "$PROG_OFF" "$off" "$PROG_RESET" \
-    "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4
+    "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4 || true
 }
 # one id resolved. The bar advances per fill position (30 of them), the count only when completion
 # crosses a percentage step — so on any backlog past about ten ids the bar is the faster of the two.
@@ -6161,7 +6163,7 @@ prog_tick() {
 prog_end() {
   [ "$PROG_MODE" = bar ] && [ "$PROG_DRAWN" = 1 ] || return 0
   PROG_COUNT=$PROG_TOTAL; prog_frame "$PROG_CELLS"
-  printf '\r\033[K' >&4
+  printf '\r\033[K' >&4 || true
 }
 
 # task-definition cache (ISSUE 077): the walk below is the largest pre-launch cost and repeats
@@ -6198,14 +6200,19 @@ validate_tasks() {
     # so an edit landing mid-walk — the walk is seconds long, and a peer may be editing throughout
     # — is newer than the stored verdict and invalidates it, instead of hiding behind it forever.
     # Its own name stays out of the cache's namespace so a leftover never reads as a stored verdict,
-    # and the trap clears it on any exit rather than leaving one behind per aborted walk.
+    # and the trap clears it when the script exits — including the abort a failed write would cause.
+    # INT and TERM keep their default action, which this script has always relied on, so a hard
+    # interrupt mid-walk can still leave one zero-byte stamp behind.
     # A git directory this run cannot write to costs the cache, never the verdict: no stamp means
     # this walk simply stores nothing.
     stamp="$COORD_GITDIR/task-defs-stamp-$$"
     : 2>/dev/null > "$stamp" || stamp=''   # 2> comes first: redirections apply left to right, and
                                           # a failing one reports on whatever stderr is by then
-    trap 'rm -f "$stamp" 2>/dev/null || true' EXIT   # EXIT only: INT/TERM keep their default
-                                                    # action, which this script has always relied on
+    # the path is baked into the trap body rather than read back from $stamp when it fires: that is
+    # a local, and a trap running after the function has returned would find it unset — which under
+    # `set -u` aborts the trap itself, onto the very stderr the callers capture as findings.
+    # shellcheck disable=SC2064  # expanding now is the point: see the note above
+    [ -n "$stamp" ] && trap "rm -f $(printf '%q' "$stamp") 2>/dev/null || true" EXIT
     while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
     sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e\n'; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
     # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
@@ -6238,8 +6245,7 @@ validate_tasks() {
             && mv -f "$cachefile.tmp.$$" "$cachefile"; } 2>/dev/null || rm -f "$cachefile.tmp.$$" 2>/dev/null || true
       fi
     fi
-    [ -n "$stamp" ] && rm -f "$stamp"
-    trap - EXIT
+    [ -n "$stamp" ] && { rm -f "$stamp"; trap - EXIT; }
   fi
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap
