@@ -21,7 +21,7 @@ set -euo pipefail
 VERSION="0.0.1"
 echo "kz-tmux.sh v$VERSION"
 
-USAGE="usage: kz-tmux.sh [-v|-vv|-vvv] [-t <wait_sec>] <num-terminals> <kaizero-command...> (wait_sec: 0-900, default of 3)"
+USAGE="usage: kz-tmux.sh [-v|-vv|-vvv] [-t <wait_sec>] <num-terminals> <kaizero-command...> (wait_sec: 0-900, default is 1)"
 
 VERBOSE=()
 if [ "$#" -ge 1 ] && [[ "$1" =~ ^-v+$ ]]; then
@@ -29,7 +29,7 @@ if [ "$#" -ge 1 ] && [[ "$1" =~ ^-v+$ ]]; then
   shift
 fi
 
-WAIT_SEC=3
+WAIT_SEC=1
 if [ "$#" -ge 1 ] && [ "$1" = "-t" ]; then
   if [ "$#" -lt 2 ] || ! [[ "$2" =~ ^[0-9]+$ ]] || [ "$2" -gt 900 ]; then
     echo "$USAGE" >&2

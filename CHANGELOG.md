@@ -8,13 +8,13 @@ All notable changes to Kaizero are documented here. Format follows
 
 ### Added
 
-- `kz-tmux` runs several Kaizero agents at once on the same Todo List, tiled side by side in a
+- `kz-tmux` runs several Kaizero instances at once on the same Todo List, tiled side by side in a
   single terminal session, so the list gets worked through faster than with one agent. Give it
-  the number of agents and the `kaizero` command to run in each. Panes stay readable after an
-  agent exits, `Ctrl-b Ctrl-c` stops all of them at once, and over SSH the session survives a
+  the number of instances and the `kaizero` command to run in each. Panes stay readable after an
+  instance exits, `Ctrl-b Ctrl-c` stops all of them at once, and over SSH the session survives a
   dropped connection so you can reattach later.
-- `kz-tmux -t` sets how long to wait between starting each agent (default 3 seconds), so a batch
-  of agents does not all reach for the same Task at the same moment.
+- `kz-tmux -t` sets how long to wait between starting each instance (default 1 second), so 
+  the load on API is normalized.
 
 ### Changed
 

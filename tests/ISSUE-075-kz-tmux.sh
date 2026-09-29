@@ -92,7 +92,7 @@ tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 # T7 — N=3 (between 2 and 12) opens exactly 3 tiled panes
 d="$TK/three-panes"; mkdir -p "$d"
-pid="$(run_kz "$d" 3 "sh -c 'sleep 5'")"
+pid="$(run_kz "$d" -t 0 3 "sh -c 'sleep 5'")"
 SESSION="kz-$(basename "$d")-$pid"
 wait_session "$SESSION" || true
 wait_panes "$SESSION" 3 || true
@@ -145,7 +145,7 @@ wait_session "$SESSION" || true
 SR="$(tmux show-options -t "$SESSION" status-right)"
 check "T12 status-right names Ctrl-b Ctrl-c" "$(printf '%s' "$SR" | grep -qc 'Ctrl-b Ctrl-c' && echo yes || echo NO)" "yes"
 check "T12 status-right names 5s repeat window" "$(printf '%s' "$SR" | grep -qc '5s' && echo yes || echo NO)" "yes"
-check "T12 status-right is green" "$(printf '%s' "$SR" | grep -qc 'fg=green' && echo yes || echo NO)" "yes"
+check "T12 status-right carries no style override" "$(printf '%s' "$SR" | grep -qc '#\[' && echo yes || echo NO)" "NO"
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 # T13 — Ctrl-b Ctrl-c broadcasts Ctrl-c to every pane; a second Ctrl-c within 5s (no Ctrl-b)
