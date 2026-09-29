@@ -106,5 +106,6 @@
 - [x] BUG-074 `kaizero.sh` exits silently on startup when the terminal's terminfo entry omits the `dim` capability tasks/BUG-074.md
 - [x] ISSUE-075 `kz-tmux.sh` runs several `kaizero` instances at once, each in its own tiled tmux pane, alongside `kaizero.sh` tasks/ISSUE-075.md
 - [x] ISSUE-076 `kz-tmux.sh` launches instances in throttled batches instead of one big burst tasks/ISSUE-076.md
+- [ ] ISSUE-077 Pre-launch validation reuses its last verdict while nothing changed, and shows progress when it must walk tasks/ISSUE-077.md
 - [?] TASK-080 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-081 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
