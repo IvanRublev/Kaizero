@@ -45,6 +45,8 @@ walked(){ [ -s "$TR/$1.fd4" ] && echo yes || echo no; }
 
 # I77-1 — a first walk is clean and stores a cache; an immediately following run reuses it
 newrepo c1 12
+sleep 1          # the stored verdict must be STRICTLY newer than every candidate, so a first walk
+                 # in the same whole second the fixture's files were written deliberately misses
 vt a; check "I77-1 first run clean" "$RC" "0"
 check "I77-1 first run walked" "$(walked a)" "yes"
 check "I77-1 cache file in the coordination git dir" "$(ls "$D/.git/" | grep -c '^task-defs-ok-')" "1"
@@ -58,8 +60,15 @@ check "I77-1 cache file is not a candidate" "$(find "$D" -type f -not -path '*/.
 # walked one, and the cache file lives where the candidate search cannot see it.
 
 # I77-2 — every filesystem change to the candidate set invalidates it
-sleep 1                                  # mtimes are whole seconds; an edit inside the cache
-                                         # file's own second is the accepted floor of the mechanism
+# first with no delay at all: bash 3.2 compares whole seconds, so an edit landing inside the stamp's
+# own second is exactly the case a loose comparison would accept forever
+printf -- 'no acceptance criteria heading\n' > tasks/TASK-3.md
+vt e0; check "I77-2 same-second edit walks" "$(walked e0)" "yes"
+check "I77-2 same-second edit reported" "$(grep -c '^empty-acceptance-criteria TASK-3:' "$TR/e0.out")" "1"
+printf -- '### Acceptance criteria\n- [ ] a\n' > tasks/TASK-3.md
+sleep 1
+vt e0b; check "I77-2 fixed again, clean" "$RC" "0"
+sleep 1
 printf -- 'no acceptance criteria heading\n' > tasks/TASK-3.md
 vt e1; check "I77-2 edit walks" "$(walked e1)" "yes"
 check "I77-2 edit reported" "$(grep -c '^empty-acceptance-criteria TASK-3:' "$TR/e1.out")" "1"

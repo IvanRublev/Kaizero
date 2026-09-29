@@ -488,11 +488,12 @@ ok "timeout present and runnable"
 sigdir="$tmp/sig"; mkdir -p "$sigdir"
 : > "$sigdir/A.md"; : > "$sigdir/B.md"
 cache="$tmp/sig-cache"; sleep 1; : > "$cache"
-# 22a. `test -nt` against the cache file's own timestamp: an untouched candidate is not newer.
-[ "$sigdir/A.md" -nt "$cache" ] && fail "test -nt called a candidate older than the cache file newer than it"
+# 22a. `test -nt` against the cache file's own timestamp, in the direction the cache reads it: the
+# stored verdict counts as usable only while it is STRICTLY newer than the candidate.
+[ "$cache" -nt "$sigdir/A.md" ] || fail "test -nt did not call the cache file newer than a candidate written before it"
 sleep 1; : > "$sigdir/A.md"                    # content edit, same name, same inode
-[ "$sigdir/A.md" -nt "$cache" ] || fail "test -nt missed a candidate touched after the cache file"
-ok "test -nt: an untouched candidate is not newer than the cache file, a touched one is"
+[ "$cache" -nt "$sigdir/A.md" ] && fail "test -nt still called the cache file newer than a candidate touched after it"
+ok "test -nt: the cache file outranks a candidate written before it, and not one touched after it"
 # 22b. `touch -r REF FILE` — the cache file is stamped with the moment the walk STARTED, not the
 # moment it ended, so a Task file edited while the walk was running still reads as newer than it.
 stampf="$tmp/sig-stamp"; : > "$stampf"; sleep 1; : > "$sigdir/B.md"; sleep 1

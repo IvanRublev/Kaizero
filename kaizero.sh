@@ -6088,13 +6088,14 @@ fmt_task_finding() {
 # run by hand has no fd 4 at all: the probe in prog_start leaves the display off rather than failing.
 PROG_CELLS=30                              # bar width; fits label + bar + count inside 80 columns
 PROG_LABEL='Validating task definitions'
-# prog_start TOTAL — open a report over TOTAL ids. fd 4's terminal-ness alone picks the mode: a
+# prog_start TOTAL STARTED — open a report over TOTAL ids, whose step began at STARTED on the
+# shell's own clock. fd 4's terminal-ness alone picks the mode: a
 # redrawing bar where someone is watching, plain lines where nothing is. Colour capability is a
 # separate question, answered by kaizero.sh's own gate (KAIZERO_COLOR) and governing styling only,
 # so NO_COLOR or a non-UTF-8 locale still gets a bar, in ASCII, rather than a demotion to lines.
 prog_start() {
   PROG_TOTAL=$1; PROG_N=0; PROG_COUNT=0; PROG_BUCKET=-1; PROG_CELL=-1; PROG_DRAWN=0; PROG_STEP=25
-  PROG_T0=$SECONDS                         # whole seconds: the finest interval bash 3.2 and both
+  PROG_T0=$2                               # whole seconds: the finest interval bash 3.2 and both
                                            # platforms' `date` can portably agree on, read from the
                                            # shell's own clock so the threshold costs no fork per id
   PROG_MODE=off
@@ -6191,7 +6192,7 @@ task_cache_file() {
 # validate_ids already follows — a run with findings proves nothing about a later one, so a backlog
 # with an unfixed finding walks (and reports progress) every time until it is fixed.
 validate_tasks() {
-  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile stamp sig p hit=0
+  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile stamp started sig p hit=0
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
   if [ "${#ids[@]}" -gt 0 ]; then
     cachefile=$(task_cache_file)
@@ -6205,6 +6206,8 @@ validate_tasks() {
     # interrupt mid-walk can still leave one zero-byte stamp behind.
     # A git directory this run cannot write to costs the cache, never the verdict: no stamp means
     # this walk simply stores nothing.
+    started=$SECONDS                       # the step's own start, before its first file search —
+                                           # the display's threshold is measured from here
     stamp="$COORD_GITDIR/task-defs-stamp-$$"
     : 2>/dev/null > "$stamp" || stamp=''   # 2> comes first: redirections apply left to right, and
                                           # a failing one reports on whatever stderr is by then
@@ -6212,18 +6215,23 @@ validate_tasks() {
     # a local, and a trap running after the function has returned would find it unset — which under
     # `set -u` aborts the trap itself, onto the very stderr the callers capture as findings.
     # shellcheck disable=SC2064  # expanding now is the point: see the note above
-    [ -n "$stamp" ] && trap "rm -f $(printf '%q' "$stamp") 2>/dev/null || true" EXIT
+    [ -n "$stamp" ] && trap "rm -f $(printf '%q' "$stamp") $(printf '%q' "$cachefile.tmp.$$") 2>/dev/null || true" EXIT
     while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
     sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e\n'; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
     # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
     if [ -n "$sig" ] && [ -f "$cachefile" ] && [ "$(cat "$cachefile" 2>/dev/null || true)" = "$sig" ]; then
       hit=1
+      # the comparison is deliberately the conservative way round — the stored verdict must be
+      # STRICTLY newer than every candidate, rather than no candidate being strictly newer than it.
+      # bash 3.2's `-nt` compares whole seconds, so the two readings differ for a file written in
+      # the same second as the stamp: the loose one would accept that edit forever, this one pays
+      # for one more walk and gets it right, and the walk after that stamps a later second and hits.
       for p in "${cands[@]+"${cands[@]}"}"; do
-        if [ "$p" -nt "$cachefile" ]; then hit=0; break; fi
+        if ! [ "$cachefile" -nt "$p" ]; then hit=0; break; fi
       done
     fi
     if [ "$hit" = 0 ]; then
-      prog_start "${#ids[@]}"
+      prog_start "${#ids[@]}" "$started"
       # the candidate set is handed over rather than enumerated a second time: the signature above
       # already paid for that `find`, and this is the path the cache exists to make cheaper.
       while IFS=$'\t' read -r id2 cls paths; do
@@ -6245,7 +6253,7 @@ validate_tasks() {
             && mv -f "$cachefile.tmp.$$" "$cachefile"; } 2>/dev/null || rm -f "$cachefile.tmp.$$" 2>/dev/null || true
       fi
     fi
-    [ -n "$stamp" ] && { rm -f "$stamp"; trap - EXIT; }
+    [ -n "$stamp" ] && { rm -f "$stamp" 2>/dev/null || true; trap - EXIT; }
   fi
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap
