@@ -123,6 +123,12 @@ rm -f "$C";              vt x1; check "I77-5 deleted cache walks"    "$(walked x
 printf 'garbage\n' > "$C"; vt x3; check "I77-5 corrupt cache walks"  "$(walked x3)" "yes"; check "I77-5 corrupt cache verdict"    "$RC" "0"
 chmod 000 "$C";          vt x4; check "I77-5 unreadable cache walks" "$(walked x4)" "yes"; check "I77-5 unreadable cache verdict" "$RC" "0"
 chmod 644 "$C" 2>/dev/null || true
+# a coordination git directory this run cannot write to costs the cache, never the verdict: no
+# stamp, no stored verdict, and not a byte on either captured stream
+chmod a-w "$D/.git"; vt x5; chmod u+w "$D/.git"
+check "I77-5 unwritable git dir verdict"      "$RC" "0"
+check "I77-5 unwritable git dir stays silent" "$(wc -c < "$TR/x5.out" | tr -d ' ')" "0"
+check "I77-5 no stamp left behind"            "$(ls "$D/.git/" | grep -c '^task-defs-stamp-')" "0"
 # I77-5 PASS — each damaged-cache shape produces one walk and the correct verdict, never a failed run.
 
 # I77-6 — a gitignored Task directory still resolves, and an edit inside it still invalidates
@@ -260,7 +266,7 @@ check "I77-11 the flap sequence" "$GAPS" "2 4 8 16 32 64 128 128 "
 # I77-11 PASS — the gap defaults to 2 seconds, stays overridable by KAIZERO_RESTART_WAIT, and is
 # still what the backoff doubles, so a flapping origin thins out to a 128-second ceiling.
 
-# ISSUE-077 PASS — I77-1 through I77-11 all report PASS.
+# ISSUE-077 PASS — I77-1 through I77-12 all report PASS.
 
 cd "$TESTROOT"
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"

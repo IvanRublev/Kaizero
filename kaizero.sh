@@ -5982,14 +5982,16 @@ candidate_paths() {
 # one TSV line: <id>\t<ok|missing|ambiguous>\t<path1>[\x1f<path2>...]. The whole candidate set is
 # unioned before any id's own canon() check runs, so candidate_paths' batching stays exactly
 # equivalent to resolving one id at a time. A caller that has already enumerated that set (it is
-# the same set, by construction) passes it as arguments instead of paying for the search twice.
+# the same set, by construction) passes it after a `--`, instead of paying for the search twice —
+# the marker, not the argument count, is what says so, so a set that is legitimately empty is
+# honoured as empty rather than re-searched for.
 resolve_task_ids() {
   local ids=() id
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done
   [ "${#ids[@]}" -gt 0 ] || return 0
 
   local all_paths=() p i
-  if [ "$#" -gt 0 ]; then all_paths=("$@")
+  if [ "${1:-}" = -- ]; then shift; all_paths=("$@")
   else while IFS= read -r -d '' p; do all_paths+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths); fi
 
   local all_cbase=() base
@@ -6195,9 +6197,17 @@ validate_tasks() {
     # enumerated. The cache file is stamped with it rather than with the moment the walk finished,
     # so an edit landing mid-walk — the walk is seconds long, and a peer may be editing throughout
     # — is newer than the stored verdict and invalidates it, instead of hiding behind it forever.
-    stamp="$cachefile.stamp.$$"; : > "$stamp"
+    # Its own name stays out of the cache's namespace so a leftover never reads as a stored verdict,
+    # and the trap clears it on any exit rather than leaving one behind per aborted walk.
+    # A git directory this run cannot write to costs the cache, never the verdict: no stamp means
+    # this walk simply stores nothing.
+    stamp="$COORD_GITDIR/task-defs-stamp-$$"
+    : 2>/dev/null > "$stamp" || stamp=''   # 2> comes first: redirections apply left to right, and
+                                          # a failing one reports on whatever stderr is by then
+    trap 'rm -f "$stamp" 2>/dev/null || true' EXIT   # EXIT only: INT/TERM keep their default
+                                                    # action, which this script has always relied on
     while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
-    sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e\n'; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' )
+    sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e\n'; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
     # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
     if [ -n "$sig" ] && [ -f "$cachefile" ] && [ "$(cat "$cachefile" 2>/dev/null || true)" = "$sig" ]; then
       hit=1
@@ -6216,17 +6226,20 @@ validate_tasks() {
           ok)        check_ac_file "$paths" || findings+=("empty-acceptance-criteria"$'\t'"$id2"$'\t'"$paths") ;;
         esac
         prog_tick
-      done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids "${cands[@]+"${cands[@]}"}")
+      done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids -- "${cands[@]+"${cands[@]}"}")
       prog_end
       # temp name carries $$: a fleet lands here in the same second and a shared name would let one
       # instance win the rename while the losers' `mv` finds nothing. `|| true` on top — the cache is
       # an optimization, never a reason to fail a run.
-      if [ "${#findings[@]}" = 0 ] && [ -n "$sig" ]; then
+      if [ "${#findings[@]}" = 0 ] && [ -n "$sig" ] && [ -n "$stamp" ]; then
+        # stderr muted throughout: the callers fold this script's error stream into their captured
+        # output, so a failed cache write must not surface there as a Task definition finding.
         { printf '%s\n' "$sig" > "$cachefile.tmp.$$" && touch -r "$stamp" "$cachefile.tmp.$$" \
-            && mv -f "$cachefile.tmp.$$" "$cachefile"; } || rm -f "$cachefile.tmp.$$" || true
+            && mv -f "$cachefile.tmp.$$" "$cachefile"; } 2>/dev/null || rm -f "$cachefile.tmp.$$" 2>/dev/null || true
       fi
     fi
-    rm -f "$stamp"
+    [ -n "$stamp" ] && rm -f "$stamp"
+    trap - EXIT
   fi
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap

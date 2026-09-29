@@ -493,14 +493,14 @@ cache="$tmp/sig-cache"; sleep 1; : > "$cache"
 sleep 1; : > "$sigdir/A.md"                    # content edit, same name, same inode
 [ "$sigdir/A.md" -nt "$cache" ] || fail "test -nt missed a candidate touched after the cache file"
 ok "test -nt: an untouched candidate is not newer than the cache file, a touched one is"
-# 22c. `touch -r REF FILE` — the cache file is stamped with the moment the walk STARTED, not the
+# 22b. `touch -r REF FILE` — the cache file is stamped with the moment the walk STARTED, not the
 # moment it ended, so a Task file edited while the walk was running still reads as newer than it.
 stampf="$tmp/sig-stamp"; : > "$stampf"; sleep 1; : > "$sigdir/B.md"; sleep 1
 fresh="$tmp/sig-fresh"; : > "$fresh"
 touch -r "$stampf" "$fresh" || fail "touch -r REF FILE failed"
 [ "$sigdir/B.md" -nt "$fresh" ] || fail "touch -r did not carry the reference file's older timestamp onto the new one"
 ok "touch -r REF FILE carries a start-of-walk timestamp onto the cache file"
-# 22b. the sorted-filename digest: `LC_ALL=C sort | cksum`, the half that catches an added,
+# 22c. the sorted-filename digest: `LC_ALL=C sort | cksum`, the half that catches an added,
 # removed or renamed candidate — a rename leaves both the timestamp and the file count alone.
 # enumerated exactly as candidate_paths does it — `find -type f -not -path '*/.git/*' \( -iname
 # … \) -print0` read back with `read -r -d ''` — then digested exactly as the signature does.
