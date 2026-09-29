@@ -19,7 +19,9 @@ SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # commit-SHA-keyed cache, which this one deliberately does not share a mechanism with.
 #
 # Progress never goes to either captured stream — it goes to fd 4, kaizero.sh's display descriptor
-# — so every case below hands zero.sh its own fd 4 and reads it back as a file.
+# — so every case below hands zero.sh its own fd 4 and reads it back as a file. Every run of the
+# emitted helper goes through $B3, the suite's own bash 3.x binary, so the portability floor this
+# change has to hold at is the one actually exercised rather than whatever bash PATH offers.
 
 # Setup
 TR="$TESTROOT/ISSUE-077-task-cache-and-progress"; mkdir -p "$TR/bin"
@@ -39,7 +41,7 @@ newrepo(){
 # vt <tag> — one validate-tasks run with its own display descriptor. Captured output (stdout+stderr,
 # exactly what the three callers capture) lands in $TR/<tag>.out, progress in $TR/<tag>.fd4, the
 # exit status in $RC. fd 4 is a plain file here, so this is the plain-line mode.
-vt(){ bash "$ZERO" validate-tasks > "$TR/$1.out" 2>&1 4>"$TR/$1.fd4"; RC=$?; }
+vt(){ "$B3" "$ZERO" validate-tasks > "$TR/$1.out" 2>&1 4>"$TR/$1.fd4"; RC=$?; }
 # did that run walk? A walk writes its plain progress lines; a cache hit has no walk to report on.
 walked(){ [ -s "$TR/$1.fd4" ] && echo yes || echo no; }
 
@@ -134,10 +136,14 @@ chmod 000 "$C";          vt x4; check "I77-5 unreadable cache walks" "$(walked x
 chmod 644 "$C" 2>/dev/null || true
 # a coordination git directory this run cannot write to costs the cache, never the verdict: no
 # stamp, no stored verdict, and not a byte on either captured stream
+sleep 1; touch tasks/TASK-1.md            # force a miss, so the run really has a walk to store
 chmod a-w "$D/.git"; vt x5; chmod u+w "$D/.git"
+check "I77-5 unwritable git dir walks"        "$(walked x5)" "yes"
 check "I77-5 unwritable git dir verdict"      "$RC" "0"
 check "I77-5 unwritable git dir stays silent" "$(wc -c < "$TR/x5.out" | tr -d ' ')" "0"
 check "I77-5 no stamp left behind"            "$(ls "$D/.git/" | grep -c '^task-defs-stamp-')" "0"
+# nothing was stored either — the next run walks again rather than trusting a verdict no stamp dated
+vt x6; check "I77-5 unwritable git dir stored nothing" "$(walked x6)" "yes"
 # I77-5 PASS — each damaged-cache shape produces one walk and the correct verdict, never a failed run.
 
 # I77-6 — a gitignored Task directory still resolves, and an edit inside it still invalidates
@@ -179,7 +185,7 @@ newrepo c8 160
 bar(){
   local tag=$1 color=$2
   KAIZERO_COLOR="$color" python3 -c 'import pty,sys; raise SystemExit(pty.spawn(["bash","-c",sys.argv[1]]))' \
-    "cd '$D' && bash '$ZERO' validate-tasks 4>&1 >/dev/null 2>/dev/null" < /dev/null > "$TR/$tag.raw" 2>/dev/null
+    "cd '$D' && '$B3' '$ZERO' validate-tasks 4>&1 >/dev/null 2>/dev/null" < /dev/null > "$TR/$tag.raw" 2>/dev/null
   python3 "$TR/barstats.py" "$TR/$tag.raw" > "$TR/$tag.stats"
 }
 # barstats — one `key=value` line per property of a captured bar rendering, so each check below
@@ -234,6 +240,11 @@ check "I77-9 NO_COLOR still redraws a bar" "$([ "$(st frames b2)" -ge 2 ] && ech
 check "I77-9 still thirty cells, in ASCII" "$(st cells b2)" "30"
 check "I77-9 no colour escape" "$(st color b2)" "0"
 check "I77-9 still erased at the end" "$(st erase b2)" "1"
+# and the verdict it is handed comes from kaizero.sh's own gate, which NO_COLOR alone turns off
+check "I77-9 NO_COLOR turns the capability gate off" \
+  "$(grep -cF 'if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then' "$REPO/kaizero.sh")" "1"
+check "I77-9 and that verdict is what zero.sh reads" \
+  "$(grep -cF 'export KAIZERO_COLOR="$COLOR_CAPABLE"' "$REPO/kaizero.sh")" "1"
 # I77-9 PASS — a terminal that declines colour is still a terminal: it keeps the bar, in ASCII,
 # rather than being demoted to the plain lines a non-terminal gets.
 
@@ -242,7 +253,7 @@ newrepo c10 3
 for col in 1 0; do
   rm -f "$D/.git/"task-defs-ok-*
   KAIZERO_COLOR="$col" python3 -c 'import pty,sys; raise SystemExit(pty.spawn(["bash","-c",sys.argv[1]]))' \
-    "cd '$D' && bash '$ZERO' validate-tasks 4>&1 >/dev/null 2>/dev/null" < /dev/null > "$TR/fast-$col.raw" 2>/dev/null
+    "cd '$D' && '$B3' '$ZERO' validate-tasks 4>&1 >/dev/null 2>/dev/null" < /dev/null > "$TR/fast-$col.raw" 2>/dev/null
   check "I77-10 nothing drawn for a sub-second walk (KAIZERO_COLOR=$col)" \
     "$(wc -c < "$TR/fast-$col.raw" | tr -d ' ')" "0"
 done
@@ -262,6 +273,10 @@ check "I77-12 the cache is stamped before the walk ended" "$([ $(( T1 - CM )) -g
 # a file touched at any point after that stamp — which includes the whole walk — invalidates
 touch tasks/TASK-77.md
 vt s2; check "I77-12 a file touched mid-walk would invalidate" "$(walked s2)" "yes"
+# and the reused verdict is measurably cheaper than the walk it replaces, not merely equal
+T2=$(date +%s); vt s3; T3=$(date +%s)
+check "I77-12 the reused verdict skipped the walk"  "$(walked s3)" "no"
+check "I77-12 and came back faster than the walk"   "$([ $(( T3 - T2 )) -lt $(( T1 - T0 )) ] && echo yes || echo NO)" "yes"
 # I77-12 PASS — the invalidation window closes at the walk's first read, not at its last, so a peer
 # editing a Task file while this instance walks can never be cached over.
 

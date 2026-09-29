@@ -6147,11 +6147,15 @@ prog_tick() {
   # the bar's own count latches instead: the line is redrawn per fill position anyway, so an
   # intermediate step that a single tick jumped over has no frame of its own to appear on.
   if [ "$bucket" -gt "$PROG_BUCKET" ]; then PROG_BUCKET=$bucket; PROG_COUNT=$PROG_N; fi
-  # draw nothing until the walk has outlived a second: below that a bar appears and clears inside a
+  # draw nothing until the step has outlived a second: below that a bar appears and clears inside a
   # frame or two, which reads worse than silence. Elapsed time, never an id index — a fixed fraction
   # of the ids lands near a second on a big backlog and near a hundredth on a small one.
+  # The two clock reads are floored whole seconds, so their difference first reaches 1 the moment a
+  # boundary is crossed — which can be a millisecond in. Requiring 2 is what makes "under a second
+  # draws nothing" hold for every walk rather than most: it puts the real threshold between one and
+  # two seconds, the whole-second imprecision this script's portability floor already accepts.
   if [ "$PROG_DRAWN" = 0 ]; then
-    [ $(( SECONDS - PROG_T0 )) -ge 1 ] || return 0
+    [ $(( SECONDS - PROG_T0 )) -ge 2 ] || return 0
     PROG_DRAWN=1                           # opens at whatever position the walk has already reached
   fi
   cell=$(( PROG_N * PROG_CELLS / PROG_TOTAL ))
