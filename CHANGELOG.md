@@ -4,6 +4,32 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-09-29
+
+### Added
+
+- `kz-tmux` runs several Kaizero agents at once on the same Todo List, tiled side by side in a
+  single terminal session, so the list gets worked through faster than with one agent. Give it
+  the number of agents and the `kaizero` command to run in each. Panes stay readable after an
+  agent exits, `Ctrl-b Ctrl-c` stops all of them at once, and over SSH the session survives a
+  dropped connection so you can reattach later.
+- `kz-tmux -t` sets how long to wait between starting each agent (default 3 seconds), so a batch
+  of agents does not all reach for the same Task at the same moment.
+
+### Changed
+
+- The default "no progress" timeout before Kaizero restarts Claude went from 1 to 3 minutes,
+  which stops healthy but quiet turns from being cut short.
+- Error messages now go to the error stream instead of normal output, so they stay visible when
+  you pipe Kaizero's output to a file and no longer pollute it.
+
+### Fixed
+
+- Timestamps Kaizero asks the agent to write into evidence lines and gate notes now come from
+  the machine's clock, so they reflect the real date instead of whatever the agent guessed.
+- Kaizero no longer fails to start in terminals that report limited capabilities; colored output
+  is simply skipped there.
+
 ## [0.1.6] - 2026-09-23
 
 ### Added
