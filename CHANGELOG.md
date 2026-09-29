@@ -15,9 +15,9 @@ All notable changes to Kaizero are documented here. Format follows
   dropped connection so you can reattach later.
 - `kz-tmux -t` sets how long to wait between starting each instance (default 1 second), so 
   the load on API is normalized.
-- A Task definition check that takes more than a second or two now shows a progress bar naming what it is
-  validating and how far it has got, and leaves no trace on the screen once it is done. Piped to a
-  file it writes a handful of plain progress lines instead.
+- A Task definition check that takes more than a two seconds now shows a progress bar naming what
+  it is validating and how far it has got, and leaves no trace on the screen once it is done. 
+  Piped to a file it writes a handful of plain progress lines instead.
 
 ### Changed
 
