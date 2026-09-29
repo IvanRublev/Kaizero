@@ -282,8 +282,9 @@ check "I77-12 the walk really took several seconds" "$([ $(( T1 - T0 )) -ge 3 ] 
 check "I77-12 the stored verdict predates the walk's end" "$([ $(( T1 - CM )) -ge 2 ] && echo yes || echo NO)" "yes"
 # a file touched at any point after that moment — which includes the whole walk — invalidates
 touch tasks/TASK-77.md
+sleep 1          # s2 writes its verdict at its own START, so the gap has to come before s2 runs for
+                 # that verdict to outrank the touched file and let s3 reuse it
 vt s2; check "I77-12 a file touched mid-walk would invalidate" "$(walked s2)" "yes"
-sleep 1          # so s2's own stored verdict is strictly newer than that file and s3 can reuse it
 # and the reused verdict is measurably cheaper than the walk it replaces, not merely equal
 T2=$(date +%s); vt s3; T3=$(date +%s)
 check "I77-12 the reused verdict skipped the walk"  "$(walked s3)" "no"

@@ -5375,9 +5375,12 @@ unchecked_todos() {
 # resolve_task_ids — reused, never reimplemented) gets that file's $COORD_ROOT-absolute path
 # appended. A checked or other-symbol line, or an unchecked id resolving to zero or multiple
 # files, prints unchanged — this only ever adds information, never a verdict.
-todo_list() {
-  local raw
-  raw=$(git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" | awk '
+# the Release Todo List's own tail on the coordination base — from the two lines before the first
+# unchecked box to the end, fence-aware — with no Task-file paths appended. todo_list annotates
+# this; unchecked_tail_ids reads it as it is, since the annotation it would otherwise pay a whole
+# resolution walk for appears only at the end of a line and never in the id it takes.
+todo_tail() {
+  git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" | awk '
     /^[ \t]*```/ { fence = !fence; next }
     fence        { next }
     /^[ \t]*- \[[^]]+\]/ {
@@ -5388,7 +5391,12 @@ todo_list() {
       if (!cut) exit 0
       start = cut - 2; if (start < 1) start = 1
       for (i = start; i <= n; i++) print line[i]
-    }')
+    }'
+}
+
+todo_list() {
+  local raw
+  raw=$(todo_tail)
   [ -n "$raw" ] || return 0
 
   local ids=() id
@@ -5924,9 +5932,11 @@ canon() {
 }
 
 # every unchecked id in todo-list's own tail, in its own walk order — validate_tasks resolves
-# exactly this set, never the checked/other-symbol lines the tail also carries for context.
+# exactly this set, never the checked/other-symbol lines the tail also carries for context. Reads
+# the tail directly rather than through todo_list: that would resolve every one of these ids to its
+# Task file first, the very walk validate_tasks is here to decide whether to run at all.
 unchecked_tail_ids() {
-  todo_list | awk '
+  todo_tail | awk '
     # a first token shaped exactly `[label](path)` (no space between `]` and `(`, no nested
     # brackets in label) resolves to its bracketed label as the id — the Quick-Entry markdown
     # link form. Anything else is used unchanged.
