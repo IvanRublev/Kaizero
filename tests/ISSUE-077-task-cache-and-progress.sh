@@ -212,6 +212,18 @@ print('glyphs=%d' % len(set(body)))
 print('width=%d' % len(mid.rstrip()))
 print('brackets=%d' % len(re.findall(r'[\[\]()|]', mid.replace('\x1b', ''))) )
 print('color=%d' % raw.count('38;2;74;201;243'))
+# the escape run at the boundary between the filled and unfilled cells — both halves use the same
+# glyph, so escapes sitting between two glyphs are exactly what introduces the unfilled segment.
+# Printed verbatim (as escaped text) so a check can assert it clears the foreground colour and does
+# not merely add an attribute on top of it.
+boundary = ''
+for f in frames:
+    m = re.search('\u2500((?:\x1b\\[[0-9;]*m)+)\u2500', f)
+    if m:
+        boundary = m.group(1)
+        break
+print('offseq=%s' % boundary.replace('\x1b', 'ESC'))
+print('offreset=%d' % (1 if re.search(r'\[(0|39)[;m]', boundary) else 0))
 print('erase=%d' % (1 if chunks and '\x1b[K' in chunks[-1] and 'Validating' not in chunks[-1] else 0))
 print('final=%d' % (1 if plain and plain[-1].rstrip().endswith('160/160') else 0))
 print('clock=%d' % len(re.findall(r'\d+(?:s|m|:\d)', mid)))
@@ -305,7 +317,60 @@ check "I77-11 the flap sequence" "$GAPS" "2 4 8 16 32 64 128 128 "
 # I77-11 PASS — the gap defaults to 2 seconds, stays overridable by KAIZERO_RESTART_WAIT, and is
 # still what the backoff doubles, so a flapping origin thins out to a 128-second ceiling.
 
-# ISSUE-077 PASS — I77-1 through I77-12 all report PASS.
+# I77-13 — KAIZERO_PROGRESS_DELAY makes the bar's draw threshold configurable. The default is the
+# same 2 seconds I77-10 proves, so an unset variable changes nothing; 0 draws from the first tick,
+# a value past the walk's own length suppresses the bar entirely, and anything that is not a plain
+# count of seconds falls back to the default silently — zero.sh's own two streams are captured by
+# its callers and read as findings, so a complaint about a bad value can never be written there.
+newrepo c13 3
+draw(){    # $1 tag, $2 KAIZERO_PROGRESS_DELAY (unset when empty) — bytes drawn on a pty'd fd 4
+  local tag=$1 d=$2
+  rm -f "$D/.git/"task-defs-ok-*
+  if [ -n "$d" ]; then export KAIZERO_PROGRESS_DELAY="$d"; else unset KAIZERO_PROGRESS_DELAY; fi
+  KAIZERO_COLOR=1 python3 -c 'import pty,sys; raise SystemExit(pty.spawn(["bash","-c",sys.argv[1]]))' \
+    "cd '$D' && '$B3' '$ZERO' validate-tasks 4>&1 >'$TR/$tag.out' 2>&1" < /dev/null > "$TR/$tag.raw" 2>/dev/null
+  unset KAIZERO_PROGRESS_DELAY
+  wc -c < "$TR/$tag.raw" | tr -d ' '
+}
+# 0 — the threshold is gone, so this same sub-second walk that draws nothing by default now draws
+check "I77-13 KAIZERO_PROGRESS_DELAY=0 draws on a sub-second walk" "$([ "$(draw d0 0)" -gt 0 ] && echo yes || echo NO)" "yes"
+# and what it draws is a real bar frame, not a stray byte
+check "I77-13 what it drew is a bar frame" "$(grep -c "$(printf '\r')" "$TR/d0.raw")" "1"
+check "I77-13 the redirected streams still got no progress" "$(wc -c < "$TR/d0.out" | tr -d ' ')" "0"
+# unset — unchanged from I77-10: the default threshold still suppresses a sub-second walk
+check "I77-13 unset keeps the 2-second default" "$(draw dunset '')" "0"
+# a ceiling past this walk's own length suppresses it just as the default does
+check "I77-13 a delay past the walk's length draws nothing" "$(draw dhigh 60)" "0"
+# not a count of seconds: fall back to the default, and never write the complaint to fd 1 or 2
+for bad in x 2s -1 '1 2' ''"'"''; do
+  check "I77-13 invalid value [$bad] falls back to the default" "$(draw dbad "$bad")" "0"
+  check "I77-13 invalid value [$bad] stays off the captured streams" "$(wc -c < "$TR/dbad.out" | tr -d ' ')" "0"
+done
+# the default is spelled twice — once in the emitted zero.sh, which applies it, and once at
+# kaizero.sh's own top, which only prints it in --help. Two copies drift; this pins them together.
+check "I77-13 --help prints the default zero.sh actually applies" \
+  "$(bash "$SCRIPT" --help 2>&1 | sed -n 's/.*Default \([0-9]*\), which keeps a short/\1/p')" \
+  "$(sed -n 's/^PROG_DELAY_DEFAULT=\([0-9]*\).*/\1/p' "$REPO/kaizero.sh")"
+# and the documented variable is the one the code reads
+check "I77-13 README documents the variable" "$(grep -c 'KAIZERO_PROGRESS_DELAY' "$REPO/README.md")" "2"
+# I77-13 PASS — the threshold is configurable, defaults to the 2 seconds I77-10 pins, and a bad
+# value degrades to that default without writing a byte to either captured stream.
+
+# I77-14 — the unfilled cells must be told apart from the filled ones by something other than the
+# dim attribute alone. `\033[2m` ADDS dim, it does not clear the truecolour foreground the filled
+# run set, so a terminal that drops or normalises SGR 2 — tmux among them — renders both halves in
+# the same blue and the bar reads as full from its first frame, with only the count moving. Clearing
+# the colour before dimming makes the two halves differ in foreground, which no terminal can flatten.
+newrepo c14 160
+rm -f "$D/.git/"task-defs-ok-*
+bar b14 1
+check "I77-14 the unfilled run clears the filled run's colour" "$(st offreset b14)" "1"
+# and the filled run is still the hoody blue it always was
+check "I77-14 the filled run is still coloured" "$([ "$(st color b14)" -ge 1 ] && echo yes || echo NO)" "yes"
+# I77-14 PASS — the two halves differ in foreground colour, not only in an attribute a terminal may
+# ignore, so the bar's fill position stays readable under tmux.
+
+# ISSUE-077 PASS — I77-1 through I77-14 all report PASS.
 
 cd "$TESTROOT"
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"

@@ -514,6 +514,12 @@ KAIZERO_QUOTA_RETRY=30m kaizero todo.md
 KAIZERO_DEPENDENCY_WAIT=20m kaizero todo.md
 ```
 
+**`KAIZERO_PROGRESS_DELAY`** — how long `zero.sh validate-tasks` has been walking before its progress bar appears, as a plain count of seconds. Default `2`; `0` draws from the first id resolved. The delay exists so a short walk draws nothing at all: a bar that appears and clears again inside a frame or two is noise, not progress. Raise it to push the bar out to only the walks you consider slow, or set `0` to watch every walk from its first tick. The bar needs a terminal on kaizero's display descriptor — where the walk is logged instead, its plain lines are written from the start and this delay never applies, because a log is a record of what ran and a line cannot flicker. A value that is not a plain count of seconds falls back to the default silently: both of `zero.sh`'s own streams are captured by its callers and read back as findings, so a complaint about a bad value would fail the very walk it commented on.
+
+```sh
+KAIZERO_PROGRESS_DELAY=0 kaizero todo.md
+```
+
 **`KAIZERO_LINK`** — comma-separated top-level names symlinked from the repo root into every Task worktree. Unset by default. A worktree is a checkout of tracked files only, so anything gitignored is absent there: if your Task lines point at Task files you keep in another git repository — `tasks/TASK-031.md` holding the Acceptance Criteria for `- [ ] TASK-031 …` — the session never sees them and works from the one-line title alone. Listing the directory here links it in, so the criteria are readable and a tick lands in the real file rather than in a copy the worktree removal deletes. Each linked name is added to `.git/info/exclude`, so it stays out of the session's `git add -A` and out of this repository.
 
 ```sh

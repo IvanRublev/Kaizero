@@ -38,6 +38,8 @@ WATCHDOG_DEFAULT=3m # KAIZERO_WATCHDOG default: how long claude may burn no CPU 
 QUOTA_RETRY_DEFAULT=15m # KAIZERO_QUOTA_RETRY default: gap between quota-wait retries (BUG-071 mechanism 2)
 WATCHDOG_GRACE="${KAIZERO_WATCHDOG_GRACE:-10}" # seconds the watchdog waits after its SIGTERM before escalating to SIGKILL
 DEPENDENCY_WAIT_DEFAULT=10m # KAIZERO_DEPENDENCY_WAIT default: ceiling on the no-claim wait below
+PROGRESS_DELAY_DEFAULT=2    # KAIZERO_PROGRESS_DELAY default, for --help only: the walk this documents runs
+                            # in the emitted zero.sh, which carries the value it actually applies (PROG_DELAY_DEFAULT)
 REVIEW_POLL_DEFAULT=5m      # KAIZERO_REVIEW_POLL default: how often a park syncs the forge
 FORGE_AUTH_RETRY_WAIT="${KAIZERO_FORGE_AUTH_RETRY_WAIT:-2}" # seconds forge_auth_ok waits between its own retries
 NETWORK_PROBE_TIMEOUT=10    # seconds a reachability probe (BUG-047) may block — bounds a
@@ -53,7 +55,8 @@ usage() {
   # single-quoted heredoc keeps backticks literal; sed injects the RESTART_WAIT constant.
   sed -e "s/@@RESTART_WAIT@@/$RESTART_WAIT/g" -e "s/@@PROG@@/$PROG/g" -e "s/@@VERSION@@/$VERSION/g" \
       -e "s/@@WATCHDOG_DEFAULT@@/$WATCHDOG_DEFAULT/g" \
-      -e "s/@@DEPENDENCY_WAIT_DEFAULT@@/$DEPENDENCY_WAIT_DEFAULT/g" <<'USAGE'
+      -e "s/@@DEPENDENCY_WAIT_DEFAULT@@/$DEPENDENCY_WAIT_DEFAULT/g" \
+      -e "s/@@PROGRESS_DELAY_DEFAULT@@/$PROGRESS_DELAY_DEFAULT/g" <<'USAGE'
 usage: @@PROG@@ [todo-file-path] [--local-merge] [--always-on] [--no-co-authorship] [-t|--taskprompt TEXT]
        @@PROG@@ --version
 version @@VERSION@@
@@ -133,6 +136,16 @@ version @@VERSION@@
                                    instant the block clears (a peer merges or its holder
                                    dies) or this ceiling elapses, whichever comes first;
                                    the relaunched session claims the next free Task.
+
+    KAIZERO_PROGRESS_DELAY=seconds
+                                   How long `zero.sh validate-tasks` walks before its
+                                   progress bar appears, as a plain count of seconds.
+                                   Default @@PROGRESS_DELAY_DEFAULT@@, which keeps a short
+                                   walk from drawing a bar that would clear again inside a
+                                   frame; 0 draws from the first id resolved.
+                                   The bar needs a terminal on the display descriptor —
+                                   where the walk is logged instead, its plain lines are
+                                   written from the start and this delay does not apply.
 
     KAIZERO_LINK=name[,name…]   Top-level directories symlinked from the repo root
                                    into every Task worktree. Unset by default. A worktree
@@ -6098,6 +6111,7 @@ fmt_task_finding() {
 # run by hand has no fd 4 at all: the probe in prog_start leaves the display off rather than failing.
 PROG_CELLS=30                              # bar width; fits label + bar + count inside 80 columns
 PROG_LABEL='Validating task definitions'
+PROG_DELAY_DEFAULT=2                       # KAIZERO_PROGRESS_DELAY default; see prog_start
 # prog_start TOTAL STARTED — open a report over TOTAL ids, whose step began at STARTED on the
 # shell's own clock. fd 4's terminal-ness alone picks the mode: a
 # redrawing bar where someone is watching, plain lines where nothing is. Colour capability is a
@@ -6108,12 +6122,27 @@ prog_start() {
   PROG_T0=$2                               # whole seconds: the finest interval bash 3.2 and both
                                            # platforms' `date` can portably agree on, read from the
                                            # shell's own clock so the threshold costs no fork per id
+  # KAIZERO_PROGRESS_DELAY overrides the draw threshold below; a plain count of seconds only, and
+  # 0 to draw from the first tick. A value this script cannot use degrades to the default INSTEAD of
+  # complaining: both of zero.sh's own streams are folded into its callers' command substitution and
+  # read back as findings, so a warning written there would fail the very walk it comments on, and
+  # an unvalidated value would reach `[ $(( ... )) -ge ]` as a syntax error on the same two streams.
+  case "${KAIZERO_PROGRESS_DELAY:-}" in
+    '' | *[!0-9]* ) PROG_DELAY=$PROG_DELAY_DEFAULT ;;
+    * )             PROG_DELAY=$KAIZERO_PROGRESS_DELAY ;;
+  esac
   PROG_MODE=off
   if { : >&4; } 2>/dev/null; then
     if [ -t 4 ]; then PROG_MODE=bar; PROG_STEP=12; else PROG_MODE=plain; PROG_STEP=25; fi
   fi
   if [ "${KAIZERO_COLOR:-0}" = 1 ]; then
-    PROG_FILL='─'; PROG_SNOW='❄ '; PROG_ON=$'\033[38;2;74;201;243m'; PROG_OFF=$'\033[2m'; PROG_RESET=$'\033[0m'
+    # PROG_OFF resets BEFORE dimming: `\033[2m` only adds the dim attribute, it does not clear the
+    # truecolour foreground PROG_ON set, so a terminal that drops or normalises SGR 2 — tmux among
+    # them — would draw the unfilled cells in the same blue as the filled ones and the bar would read
+    # as full from its first frame, with only the count moving. Resetting first leaves the two halves
+    # differing in foreground colour, which no terminal can flatten, and keeps the dim on top for the
+    # ones that do honour it.
+    PROG_FILL='─'; PROG_SNOW='❄ '; PROG_ON=$'\033[38;2;74;201;243m'; PROG_OFF=$'\033[0m\033[2m'; PROG_RESET=$'\033[0m'
   else
     PROG_FILL='-'; PROG_SNOW=''; PROG_ON=''; PROG_OFF=''; PROG_RESET=''
   fi
@@ -6165,7 +6194,7 @@ prog_tick() {
   # draws nothing" hold for every walk rather than most: it puts the real threshold between one and
   # two seconds, the whole-second imprecision this script's portability floor already accepts.
   if [ "$PROG_DRAWN" = 0 ]; then
-    [ $(( SECONDS - PROG_T0 )) -ge 2 ] || return 0
+    [ $(( SECONDS - PROG_T0 )) -ge "$PROG_DELAY" ] || return 0
     PROG_DRAWN=1                           # opens at whatever position the walk has already reached
   fi
   cell=$(( PROG_N * PROG_CELLS / PROG_TOTAL ))
