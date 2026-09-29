@@ -481,4 +481,37 @@ command -v timeout >/dev/null 2>&1 || fail "timeout not found on PATH — networ
 timeout 2 true || fail "timeout 2 true did not succeed (want exit 0 well inside the 2s budget)"
 ok "timeout present and runnable"
 
+# 22. validate_tasks' cache signature (ISSUE 077): the two calls the signature is built from, in
+# the exact forms it uses them. Deliberately neither `stat`'s format flags nor `find`'s printing
+# predicate — one is spelled differently on the two platforms and the other is missing from macOS —
+# so this proves the single code path behaves the same on both.
+sigdir="$tmp/sig"; mkdir -p "$sigdir"
+: > "$sigdir/A.md"; : > "$sigdir/B.md"
+cache="$tmp/sig-cache"; sleep 1; : > "$cache"
+# 22a. `test -nt` against the cache file's own timestamp: an untouched candidate is not newer.
+[ "$sigdir/A.md" -nt "$cache" ] && fail "test -nt called a candidate older than the cache file newer than it"
+sleep 1; : > "$sigdir/A.md"                    # content edit, same name, same inode
+[ "$sigdir/A.md" -nt "$cache" ] || fail "test -nt missed a candidate touched after the cache file"
+ok "test -nt: an untouched candidate is not newer than the cache file, a touched one is"
+# 22b. the sorted-filename digest: `LC_ALL=C sort | cksum`, the half that catches an added,
+# removed or renamed candidate — a rename leaves both the timestamp and the file count alone.
+# enumerated exactly as candidate_paths does it — `find -type f -not -path '*/.git/*' \( -iname
+# … \) -print0` read back with `read -r -d ''` — then digested exactly as the signature does.
+namedigest() {
+  local p cands=()
+  while IFS= read -r -d '' p; do cands+=("$p"); done < <(
+    find "$sigdir" -type f -not -path '*/.git/*' \( -iname 'a*.md' -o -iname 'b*.md' -o -iname 'c*.md' -o -iname 'z*.md' \) -print0 2>/dev/null
+  )
+  printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort | cksum | awk '{print $1}'
+}
+d0="$(namedigest)"
+case "$d0" in ''|*[!0-9]*) fail "find|sort|cksum digest produced '$d0'" ;; esac
+[ "$(namedigest)" = "$d0" ] || fail "find|sort|cksum digest is not stable across two identical calls"
+: > "$sigdir/C.md";           d_add="$(namedigest)"
+[ "$d_add" != "$d0" ] || fail "digest unchanged after adding a candidate"
+rm -f "$sigdir/C.md";         [ "$(namedigest)" = "$d0" ] || fail "digest did not return to its value after removing the added candidate"
+mv "$sigdir/B.md" "$sigdir/Z.md"; d_ren="$(namedigest)"
+[ "$d_ren" != "$d0" ] || fail "digest unchanged after renaming a candidate (same count, same timestamps)"
+ok "find|sort|cksum filename digest changes on add, remove and rename, and is stable otherwise"
+
 echo "SMOKE PASS ($(uname -s), bash $BASH_VERSION)"

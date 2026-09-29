@@ -173,9 +173,10 @@ check "S7 LOG_TICK overridable via KAIZERO_LOG_TICK" \
 
 # S8 — RESTART_WAIT (the between-restart cadence used for RESTART_GAP) is overridable via
 # KAIZERO_RESTART_WAIT, same pattern — it was a plain `RESTART_WAIT=5` with no env read at all,
-# so a fixture that exported RESTART_WAIT directly was silently ignored.
-check "S8 RESTART_WAIT overridable via KAIZERO_RESTART_WAIT" \
-  "$(grep -cF 'RESTART_WAIT="${KAIZERO_RESTART_WAIT:-5}"' "$REPO/kaizero.sh")" "1"
+# so a fixture that exported RESTART_WAIT directly was silently ignored. Its default is 2 seconds
+# (ISSUE 077): the walk it used to cover now caches, so the gap no longer has work to hide.
+check "S8 RESTART_WAIT overridable via KAIZERO_RESTART_WAIT, default 2" \
+  "$(grep -cF 'RESTART_WAIT="${KAIZERO_RESTART_WAIT:-2}"' "$REPO/kaizero.sh")" "1"
 
 # S9 — WATCHDOG_GRACE (seconds between the watchdog's SIGTERM and its SIGKILL escalation) is
 # overridable via KAIZERO_WATCHDOG_GRACE, so a watchdog-kill-escalation fixture doesn't have to

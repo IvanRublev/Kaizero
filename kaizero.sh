@@ -29,7 +29,7 @@ case "$(uname)" in
     *)      PTY_STYLE=util-linux ;;
 esac
 
-RESTART_WAIT="${KAIZERO_RESTART_WAIT:-5}" # seconds between claude restarts — the window to press Ctrl+C
+RESTART_WAIT="${KAIZERO_RESTART_WAIT:-2}" # seconds between claude restarts — the window to press Ctrl+C
 WAIT_TICK="${KAIZERO_WAIT_TICK:-5}" # seconds between claimable-Task probes while every unchecked Task is peer-held
 WAIT_FRAME=1         # seconds per spinner frame on a terminal — one |/-\ revolution every 4
 WAIT_STEP=5          # seconds the terminal's elapsed clock advances in — at 1Hz a live clock is noise
@@ -1162,6 +1162,10 @@ else
   C_BWHITE=''; C_BLUE=''; C_GOLD=''
   BOX_TL='+'; BOX_TR='+'; BOX_BL='+'; BOX_BR='+'; BOX_H='-'; BOX_V='|'; ARROW='->'; DOT='.'; SNOW=''
 fi
+# handed down to the emitted zero.sh, which draws validate-tasks' progress bar on fd 4 and needs
+# this verdict for its STYLING only — glyph and color, never bar-vs-plain-lines, which fd 4's own
+# terminal-ness decides there.
+export KAIZERO_COLOR="$COLOR_CAPABLE"
 # c COLOR TEXT... — wrap TEXT in COLOR, reset after. Empty COLOR (plain mode) is a no-op passthrough.
 c() { local color=$1; shift; printf '%s%s%s' "$color" "$*" "$C_RESET"; }
 # icon — the "❄ " prefix in hoody-blue, or nothing at all (no bare space either) in plain mode.
@@ -5937,26 +5941,26 @@ unchecked_tail_ids() {
     }'
 }
 
-# resolve_task_ids: reads raw ids on stdin, one per line; for each, in the SAME order, prints
-# one TSV line: <id>\t<ok|missing|ambiguous>\t<path1>[\x1f<path2>...]. One shared `find` per 200
-# ids (ARG_MAX headroom, never a hard limit) over $COORD_ROOT alone — a Task file living only
-# under $TARGET_ROOT is unresolvable by design (two-repo mode), and a batch's result set is
-# unioned before any id's own canon() check runs, so batching stays exactly equivalent to
-# resolving one id at a time.
-resolve_task_ids() {
+# candidate_paths: reads raw ids on stdin, one per line; prints, NUL-separated, every file under
+# $COORD_ROOT whose name could resolve to one of them. One shared `find` per 200 ids (ARG_MAX
+# headroom, never a hard limit) over $COORD_ROOT alone — a Task file living only under
+# $TARGET_ROOT is unresolvable by design (two-repo mode). This is what "candidate" means for both
+# callers: resolve_task_ids matches these against each id, and validate_tasks' cache signature
+# describes exactly this set, so a Markdown file no unchecked id could resolve to changes neither.
+candidate_paths() {
   local ids=() id
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done
   local n=${#ids[@]}
   [ "$n" -gt 0 ] || return 0
 
-  local all_paths=() seen=$'\n' batch=200 start=0 end i g first clauses p
+  local seen=$'\n' batch=200 start=0 end i g first clauses p
   while [ "$start" -lt "$n" ]; do
     end=$(( start + batch )); [ "$end" -gt "$n" ] && end=$n
     clauses=(); first=1
     for (( i = start; i < end; i++ )); do
       # find's own coarse prefilter: lowercase, each run of non-alphanumeric chars -> '*', no
       # leading '*' so a basename must literally start with the id. Never the authority — every
-      # candidate still goes through the exact canon() check below.
+      # candidate still goes through the exact canon() check in resolve_task_ids.
       g=$(printf '%s' "${ids[i]}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '*')
       if [ "$first" = 1 ]; then clauses+=(-iname "$g*.md"); first=0
       else clauses+=(-o -iname "$g*.md"); fi
@@ -5966,12 +5970,25 @@ resolve_task_ids() {
     # ids) so one real file is never counted as two matches for the same id.
     while IFS= read -r -d '' p; do
       case "$seen" in *$'\n'"$p"$'\n'*) continue ;; esac
-      all_paths+=("$p"); seen="${seen}${p}"$'\n'
+      printf '%s\0' "$p"; seen="${seen}${p}"$'\n'
     done < <(
       find "$COORD_ROOT" -type f -not -path '*/.git/*' \( "${clauses[@]}" \) -print0 2>/dev/null
     )
     start=$end
   done
+}
+
+# resolve_task_ids: reads raw ids on stdin, one per line; for each, in the SAME order, prints
+# one TSV line: <id>\t<ok|missing|ambiguous>\t<path1>[\x1f<path2>...]. The whole candidate set is
+# unioned before any id's own canon() check runs, so candidate_paths' batching stays exactly
+# equivalent to resolving one id at a time.
+resolve_task_ids() {
+  local ids=() id
+  while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done
+  [ "${#ids[@]}" -gt 0 ] || return 0
+
+  local all_paths=() p i
+  while IFS= read -r -d '' p; do all_paths+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
 
   local all_cbase=() base
   for p in "${all_paths[@]+"${all_paths[@]}"}"; do
@@ -6060,22 +6077,133 @@ fmt_task_finding() {
   esac
 }
 
+# --- validate-tasks progress (ISSUE 077) ---------------------------------------------------
+# Progress goes to fd 4 — kaizero.sh's display descriptor, the one still pointing at the terminal
+# when its normal output is redirected. Both of this script's own streams are folded into the
+# callers' command substitution, so a byte written there would come back as a finding. A zero.sh
+# run by hand has no fd 4 at all: the probe in prog_start leaves the display off rather than failing.
+PROG_CELLS=30                              # bar width; fits label + bar + count inside 80 columns
+PROG_LABEL='Validating task definitions'
+# prog_start TOTAL — open a report over TOTAL ids. fd 4's terminal-ness alone picks the mode: a
+# redrawing bar where someone is watching, plain lines where nothing is. Colour capability is a
+# separate question, answered by kaizero.sh's own gate (KAIZERO_COLOR) and governing styling only,
+# so NO_COLOR or a non-UTF-8 locale still gets a bar, in ASCII, rather than a demotion to lines.
+prog_start() {
+  PROG_TOTAL=$1; PROG_N=0; PROG_COUNT=0; PROG_BUCKET=-1; PROG_CELL=-1; PROG_DRAWN=0; PROG_STEP=25
+  PROG_T0=$(date +%s)                      # whole seconds: the finest interval bash 3.2 and both
+                                           # platforms' `date` can portably agree on
+  PROG_MODE=off
+  if { : >&4; } 2>/dev/null; then
+    if [ -t 4 ]; then PROG_MODE=bar; PROG_STEP=12; else PROG_MODE=plain; fi
+  fi
+  if [ "${KAIZERO_COLOR:-0}" = 1 ]; then
+    PROG_FILL='─'; PROG_SNOW='❄ '; PROG_ON=$'\033[38;2;74;201;243m'; PROG_OFF=$'\033[2m'; PROG_RESET=$'\033[0m'
+  else
+    PROG_FILL='-'; PROG_SNOW=''; PROG_ON=''; PROG_OFF=''; PROG_RESET=''
+  fi
+  # a log is a record of what ran, so the opening line is unconditional there — the draw threshold
+  # exists to stop a bar flickering on a screen, and a line cannot flicker.
+  if [ "$PROG_MODE" = plain ]; then PROG_BUCKET=0; prog_line; fi
+}
+# N repeats of the fill glyph, built in-shell: `tr` cannot portably map one byte to a multi-byte one.
+prog_fill() { local n=$1 s='' i=0; while [ "$i" -lt "$n" ]; do s="$s$PROG_FILL"; i=$((i+1)); done; printf '%s' "$s"; }
+# one plain line — same label and count as the bar, no bar and no escape sequences.
+prog_line() { printf '%s%s %*s/%s\n' "$PROG_SNOW" "$PROG_LABEL" "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4; }
+# one bar frame, $1 cells filled. Label and count are padded to constant widths, so the bar's left
+# edge and the line's total length never move between frames.
+prog_frame() {
+  printf '\r%s%s %s%s%s%s%s %*s/%s\033[K' "$PROG_SNOW" "$PROG_LABEL" \
+    "$PROG_ON" "$(prog_fill "$1")" "$PROG_OFF" "$(prog_fill $(( PROG_CELLS - $1 )))" "$PROG_RESET" \
+    "${#PROG_TOTAL}" "$PROG_COUNT" "$PROG_TOTAL" >&4
+}
+# one id resolved. The bar advances per fill position (30 of them), the count only when completion
+# crosses a percentage step — so on any backlog past about ten ids the bar is the faster of the two.
+prog_tick() {
+  [ "$PROG_MODE" = off ] && return 0
+  PROG_N=$((PROG_N+1))
+  local pct=$(( PROG_N * 100 / PROG_TOTAL )) bucket cell crossed=0
+  bucket=$(( pct / PROG_STEP ))
+  if [ "$bucket" -gt "$PROG_BUCKET" ]; then PROG_BUCKET=$bucket; PROG_COUNT=$PROG_N; crossed=1; fi
+  if [ "$PROG_MODE" = plain ]; then
+    [ "$crossed" = 1 ] && prog_line
+    return 0
+  fi
+  # draw nothing until the walk has outlived a second: below that a bar appears and clears inside a
+  # frame or two, which reads worse than silence. Elapsed time, never an id index — a fixed fraction
+  # of the ids lands near a second on a big backlog and near a hundredth on a small one.
+  if [ "$PROG_DRAWN" = 0 ]; then
+    [ $(( $(date +%s) - PROG_T0 )) -ge 1 ] || return 0
+    PROG_DRAWN=1                           # opens at whatever position the walk has already reached
+  fi
+  cell=$(( PROG_N * PROG_CELLS / PROG_TOTAL ))
+  if [ "$cell" != "$PROG_CELL" ]; then PROG_CELL=$cell; prog_frame "$cell"; fi
+  return 0
+}
+# close the report: one last frame carrying the true total rather than wherever the count's cadence
+# stopped, then erase the line so a finished step leaves no residue. A walk that drew nothing closes
+# nothing — that closing frame would be exactly the single-frame flash the threshold prevents.
+prog_end() {
+  [ "$PROG_MODE" = bar ] && [ "$PROG_DRAWN" = 1 ] || return 0
+  PROG_COUNT=$PROG_TOTAL; prog_frame "$PROG_CELLS"
+  printf '\r\033[K' >&4
+}
+
+# task-definition cache (ISSUE 077): the walk below is the largest pre-launch cost and repeats
+# identically between sessions. It is keyed on a filesystem signature, never on a commit — Task
+# files may be gitignored or carry uncommitted edits, and both must keep invalidating it, which is
+# the whole reason this step was uncached. The signature is a digest of the sorted candidate paths,
+# which changes when one is added, deleted or renamed (a rename leaves the inode's timestamp
+# untouched, so timestamps alone are blind to it), plus the unchecked ids the walk was asked about —
+# git-derived by construction, since they come off COORD_BASE's own Todo List, so a peer's
+# uncommitted edit to its copy is not a change to the list this fleet coordinates on. Content edits
+# are caught separately, by `test -nt` against the cache file's own mtime: one code path on both
+# platforms, needing neither `stat`'s format flags nor `find`'s printing predicate. The file lives
+# in the coordination git directory — untracked, and excluded from candidate_paths' own `find`, so
+# writing it can never invalidate the verdict it just stored.
+task_cache_file() {
+  local key
+  key=$(printf '%s\x1e%s\n' "$COORD_BASE" "$TODO_PATH" | cksum | awk '{print $1}')
+  printf '%s/task-defs-ok-%s' "$COORD_GITDIR" "$key"
+}
+
 # validate-tasks: exit 0 = clean, nothing printed; exit 1 = at least one unresolved unchecked id,
 # on stderr, one line per finding via fmt_task_finding, capped at the first 5 in walk order plus
 # a trailing "… and N more" past that. Separate from validate_ids on purpose: each
-# keeps its own exit code and finding vocabulary. No cache — find reads the real filesystem so a
-# gitignored Task directory stays resolvable, and an uncommitted edit must be caught every run.
+# keeps its own exit code and finding vocabulary. Only a clean verdict is cached, the rule
+# validate_ids already follows — a run with findings proves nothing about a later one, so a backlog
+# with an unfixed finding walks (and reports progress) every time until it is fixed.
 validate_tasks() {
-  local id id2 cls paths findings=() total cap=5 shown i ids=()
+  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile sig p hit=0
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
   if [ "${#ids[@]}" -gt 0 ]; then
-    while IFS=$'\t' read -r id2 cls paths; do
-      case "$cls" in
-        missing)   findings+=("missing-task-file"$'\t'"$id2") ;;
-        ambiguous) findings+=("ambiguous-task-file"$'\t'"$id2"$'\t'"$paths") ;;
-        ok)        check_ac_file "$paths" || findings+=("empty-acceptance-criteria"$'\t'"$id2"$'\t'"$paths") ;;
-      esac
-    done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids)
+    cachefile=$(task_cache_file)
+    while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
+    sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e\n'; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' )
+    # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
+    if [ -n "$sig" ] && [ -f "$cachefile" ] && [ "$(cat "$cachefile" 2>/dev/null || true)" = "$sig" ]; then
+      hit=1
+      for p in "${cands[@]+"${cands[@]}"}"; do
+        if [ "$p" -nt "$cachefile" ]; then hit=0; break; fi
+      done
+    fi
+    if [ "$hit" = 0 ]; then
+      prog_start "${#ids[@]}"
+      while IFS=$'\t' read -r id2 cls paths; do
+        case "$cls" in
+          missing)   findings+=("missing-task-file"$'\t'"$id2") ;;
+          ambiguous) findings+=("ambiguous-task-file"$'\t'"$id2"$'\t'"$paths") ;;
+          ok)        check_ac_file "$paths" || findings+=("empty-acceptance-criteria"$'\t'"$id2"$'\t'"$paths") ;;
+        esac
+        prog_tick
+      done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids)
+      prog_end
+      # temp name carries $$: a fleet lands here in the same second and a shared name would let one
+      # instance win the rename while the losers' `mv` finds nothing. `|| true` on top — the cache is
+      # an optimization, never a reason to fail a run.
+      if [ "${#findings[@]}" = 0 ] && [ -n "$sig" ]; then
+        { printf '%s\n' "$sig" > "$cachefile.tmp.$$" && mv -f "$cachefile.tmp.$$" "$cachefile"; } || rm -f "$cachefile.tmp.$$" || true
+      fi
+    fi
   fi
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap
