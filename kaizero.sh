@@ -6242,6 +6242,38 @@ prog_end() {
   printf '\r\033[K' >&4 || true
 }
 
+# step lock (ISSUE 081): validate-tasks and resolve-tasks each run their check-and-build under their
+# own flock on fd 12, so launchers reaching a changed backlog together walk it once. A caller that
+# misses its cache calls lock_step, re-checks the cache against a fresh signature, and rebuilds only
+# on a second miss; the kernel drops the lock when the process ends, kill -9 included, and the
+# step's own process is the only holder, so no session ever inherits it. A lock that cannot be
+# opened or taken costs the lock, never the step. No timeout: a live holder is waited for.
+# lock_step FILE WHAT — a waiting caller draws one line on fd 4 like prog_start does: plain mode at
+# once, bar mode once KAIZERO_PROGRESS_DELAY seconds have passed, nothing without a descriptor.
+lock_step() {
+  local d mode=off snow='' msg
+  { exec 12>"$1"; } 2>/dev/null || return 0
+  "$FLOCK_BIN" -n 12 2>/dev/null && return 0
+  case "${KAIZERO_PROGRESS_DELAY:-}" in
+    '' | *[!0-9]* ) d=$PROG_DELAY_DEFAULT ;;
+    * )             d=$KAIZERO_PROGRESS_DELAY ;;
+  esac
+  if { : >&4; } 2>/dev/null; then if [ -t 4 ]; then mode=bar; else mode=plain; fi; fi
+  [ "${KAIZERO_COLOR:-0}" = 1 ] && snow='❄ '
+  msg="${snow}Waiting for another launcher to finish $2"
+  case "$mode" in
+    plain) printf '%s\n' "$msg" >&4 || true ;;
+    bar)   if [ "$d" -gt 0 ]; then
+             "$FLOCK_BIN" -w "$d" 12 2>/dev/null && return 0   # still held after the delay: draw, then block
+           fi
+           printf '\r%s\033[K' "$msg" >&4 || true ;;
+  esac
+  "$FLOCK_BIN" 12 2>/dev/null || exec 12>&-
+  [ "$mode" = bar ] && { printf '\r\033[K' >&4 || true; }
+  return 0
+}
+unlock_step() { exec 12>&-; }
+
 # resolved list (BUG 078): resolve_task_ids' answer for every unchecked id, built once per change by
 # the loop's resolve-tasks step and read by todo-list. Keyed like the task-definition cache on the
 # filesystem signature (sorted candidate paths plus the unchecked ids, both file-name facts), but with
@@ -6286,14 +6318,19 @@ resolved_lines() {
 # the callers capture them and read any byte as a finding. A git directory it cannot write costs the
 # cache only. A hit draws nothing; a rebuild draws validate-tasks' display under its own label.
 resolve_tasks() {
-  local ids=() id started cachefile tmp line out=()
+  local ids=() id started cachefile tmp line out=() locked=0
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
   [ "${#ids[@]}" -gt 0 ] || return 0
   cachefile=$(resolved_cache_file)
   started=$SECONDS
-  tasks_signature "${ids[@]}"
-  [ -n "$TS_SIG" ] || return 0
-  resolved_lines "${ids[@]}" >/dev/null 2>&1 && return 0
+  # first check lock-free; a miss takes the lock and checks again against the files as they are then
+  while :; do
+    tasks_signature "${ids[@]}"
+    [ -n "$TS_SIG" ] || { unlock_step; return 0; }
+    resolved_lines "${ids[@]}" >/dev/null 2>&1 && { unlock_step; return 0; }
+    [ "$locked" = 0 ] || break
+    lock_step "$COORD_GITDIR/resolve-tasks-${cachefile##*-}.lock" 'resolving task files'; locked=1
+  done
   PROG_LABEL='Resolving task files'
   prog_start "${#ids[@]}" "$started"
   while IFS= read -r line; do out+=("$line"); prog_tick; done \
@@ -6306,6 +6343,7 @@ resolve_tasks() {
   else
     rm -f "$tmp" 2>/dev/null || true
   fi
+  unlock_step
   return 0
 }
 
@@ -6337,12 +6375,16 @@ task_cache_file() {
 # validate_ids already follows — a run with findings proves nothing about a later one, so a backlog
 # with an unfixed finding walks (and reports progress) every time until it is fixed.
 validate_tasks() {
-  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile tmp started sig p hit=0
+  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile tmp started sig p hit=0 locked=0
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
   if [ "${#ids[@]}" -gt 0 ]; then
     cachefile=$(task_cache_file)
     started=$SECONDS                       # the step's own start, before its first file search —
                                            # the display's threshold is measured from here
+    # first check lock-free; a miss takes the lock and checks again against the files as they are
+    # then (ISSUE 081), because the holder ahead has usually published by the time the lock is ours
+    while :; do
+    cands=(); hit=0
     while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
     sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e%s\n' "${#cands[@]}"; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
     # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
@@ -6357,6 +6399,9 @@ validate_tasks() {
         if ! [ "$cachefile" -nt "$p" ]; then hit=0; break; fi
       done
     fi
+    [ "$hit" = 0 ] && [ "$locked" = 0 ] || break
+    lock_step "$COORD_GITDIR/validate-tasks-${cachefile##*-}.lock" 'validating task definitions'; locked=1
+    done
     if [ "$hit" = 0 ]; then
       # the verdict is written now, BEFORE the walk reads a single Task file, and only renamed into
       # place once the walk comes back clean — `mv` inside one directory is a rename, which leaves
@@ -6397,6 +6442,7 @@ validate_tasks() {
       fi
     fi
   fi
+  unlock_step
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap
   for (( i = 0; i < shown; i++ )); do fmt_task_finding "${findings[i]}" >&2; done
