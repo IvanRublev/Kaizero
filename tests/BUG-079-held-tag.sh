@@ -51,6 +51,23 @@ check "H3 same line count" "$(wc -l < "$TB/after.out" | tr -d ' ')" "$(wc -l < "
 check "H3 landed untagged" "$(grep -c 'DONE.*held' "$TB/after.out")" "0"
 check "H4 C-locale bytes" "$(LC_ALL=C "$ZERO" todo-list 2>&1 | cmp -s - "$TB/after.out" && echo same || echo DIFF)" "same"
 
+# H8 same tagged bytes from the target root; working-tree edit changes neither listing nor tags;
+# todo.md is never written; the holder itself (a session marker naming its own Task) sees the tag
+check "H8 target root" "$(cd "$TB" && "$ZERO" todo-list 2>&1 | cmp -s - "$TB/after.out" && echo same || echo DIFF)" "same"
+cp todo.md "$TB/todo.keep"; printf -- '- [ ] EXTRA uncommitted\n' >> todo.md
+"$ZERO" todo-list > "$TB/wtedit.out" 2>&1
+check "H8 working-tree edit ignored" "$(cmp -s "$TB/wtedit.out" "$TB/after.out" && echo same || echo DIFF)" "same"
+cp "$TB/todo.keep" todo.md
+check "H8 todo.md never tagged" "$(grep -c 'held by a live peer' todo.md)" "0"
+# release: peer finishes (worktree and branch gone) -> next call untagged, no file change
+git worktree remove --force "$TB/wt-SOLO"; git branch -qD main-task-SOLO
+"$ZERO" todo-list > "$TB/rel.out" 2>&1
+check "H8 released untagged" "$(grep -cF -- "- [ ] SOLO" "$TB/rel.out")" "1"
+# reused pid: start time differs -> untagged
+printf '%s\n%s\n%s\n%s\n' "${PEERS[1]}" "Thu Jan  1 00:00:00 1970" 1 X > "$TB/wt-SMTH-855/.owner"
+"$ZERO" todo-list > "$TB/reuse.out" 2>&1
+check "H8 reused pid untagged" "$(grep -cF -- "- [ ] SMTH:855 colon id" "$TB/reuse.out")" "1"
+
 # dead owner: untagged
 kill "${PEERS[0]}"; wait "${PEERS[0]}" 2>/dev/null || true
 "$ZERO" todo-list > "$TB/dead.out" 2>&1
