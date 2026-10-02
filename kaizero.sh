@@ -6246,9 +6246,7 @@ lock_step() {
   case "$mode" in
     plain) printf '%s\n' "$msg" >&4 || true ;;
     bar)   if [ "$d" -gt 0 ]; then
-             # 1 = the delay ran out with the lock still held; anything else is a lock error
-             "$FLOCK_BIN" -w "$d" 12 2>/dev/null && return 0
-             [ -e /dev/fd/12 ] || return 0
+             "$FLOCK_BIN" -w "$d" 12 2>/dev/null && return 0   # still held after the delay: draw, then block
            fi
            printf '\r%s\033[K' "$msg" >&4 || true ;;
   esac
