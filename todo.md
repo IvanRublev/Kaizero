@@ -115,4 +115,4 @@ and the ones caused by missing synchronization run concurrently again
 - [x] BUG-082 Launchers write shared executable helpers and coordination records in place, so a peer that runs or reads one while it is rewritten gets a truncated file (f.e. `.git/zero.sh: line 2193: syntax error: unexpected end of file`), where a whole-file replace was intended tasks/BUG-082.md
 - [?] TASK-091 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-092 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, 
-- [ ] BUG-093 A zeroing session can switch its Task worktree off the claim branch with one `git checkout`, so a peer rescues the live Task, where the session prompt's ban on switching branches was intended to hold tasks/BUG-093.md
+- [ ] BUG-083 A zeroing session can switch its Task worktree off the claim branch with one `git checkout`, so a peer rescues the live Task, where the session prompt's ban on switching branches was intended to hold tasks/BUG-083.md
