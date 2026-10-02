@@ -5618,7 +5618,7 @@ is_done() {
 # something else in the same tick).
 held_ids() {
   local path branch id pid st cur wl
-  wl=$(git -C "$COORD_ROOT" worktree list --porcelain) || return 1
+  wl=$(git -C "$COORD_ROOT" worktree list --porcelain 2>/dev/null) || return 1
   while IFS=$'\t' read -r path branch; do
     case "$branch" in "$COORD_BASE-task-"*) id=${branch#"$COORD_BASE"-task-} ;; *) continue ;; esac
     [ -f "$path/.owner" ] || continue
