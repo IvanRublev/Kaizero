@@ -2863,7 +2863,7 @@ register_target() {
 # `declare -f`, so every writer shares this one body.
 atomic_put() {
   local final=$1 stem=${2:-$1} mode=${3:-} s p tmp
-  tmp="$stem.$$.tmp"
+  tmp="$stem.${BASHPID:-$$}.tmp"
   for s in "$stem".*.tmp; do
     [ -e "$s" ] || continue
     p=${s#"$stem".}; p=${p%.tmp}
