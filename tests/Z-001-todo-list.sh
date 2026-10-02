@@ -47,8 +47,8 @@ Prose that is not a checkbox.
 EOF
 git add -A; git commit -qm z1
 "$ZERO" todo-list > "$TZR/z1.out" 2>&1
-check "Z1 lines" "$(wc -l < "$TZR/z1.out" | tr -d ' ')" "2"
-check "Z1 verbatim" "$(diff <(printf -- '- [ ] Z1 alpha task\n- [ ] Z2 beta task\n') "$TZR/z1.out" >/dev/null && echo yes || echo NO)" "yes"
+check "Z1 lines" "$(wc -l < "$TZR/z1.out" | tr -d ' ')" "3"
+check "Z1 verbatim" "$(diff <(printf -- '- [ ] Z1 alpha task\n- [ ] Z2 beta task\nNext page: none\n') "$TZR/z1.out" >/dev/null && echo yes || echo NO)" "yes"
 check "Z1 no prose" "$(grep -c 'Prose\|^#' "$TZR/z1.out")" "0"
 check "Z1 no fence" "$(grep -c FENCED "$TZR/z1.out")" "0"
 check "Z1 usage" "$("$ZERO" 2>&1 | grep -c 'todo-list')" "1"
@@ -60,9 +60,11 @@ newrepoz z2
 printf -- '- [x] Z1 done\n- [x] Z2 done\n- [x] Z3 done\n- [x] Z4 done\n- [ ] Z5 todo\n- [ ] Z6 todo\n- [x] Z7 done later\n' > todo.md
 git add -A; git commit -qm z2
 "$ZERO" todo-list > "$TZR/z2.out" 2>&1
-check "Z2 lines" "$(wc -l < "$TZR/z2.out" | tr -d ' ')" "5"
-check "Z2 first" "$(head -1 "$TZR/z2.out")" "- [x] Z3 done"
-check "Z2 last" "$(tail -1 "$TZR/z2.out")" "- [x] Z7 done later"
+check "Z2 lines" "$(wc -l < "$TZR/z2.out" | tr -d ' ')" "6"
+check "Z2 landed line" "$(head -1 "$TZR/z2.out")" "Landed: Z1 Z2 Z3 Z4 Z7"
+check "Z2 first" "$(sed -n 2p "$TZR/z2.out")" "- [x] Z3 done"
+check "Z2 last" "$(tail -1 "$TZR/z2.out")" "Next page: none"
+check "Z2 after-cut Landed line not printed" "$(grep -c 'Z7 done later' "$TZR/z2.out")" "0"
 check "Z2 dropped" "$(grep -c 'Z1 done\|Z2 done' "$TZR/z2.out")" "0"
 # Z2 PASS — the two `[x]` tasks before the kept pair are gone; the window starts at `Z3`, two
 # lines above the first `[ ]`, and runs to the end of the list, `[x] Z7` included.
@@ -72,7 +74,7 @@ newrepoz z3
 printf -- '- [x] Z1 done\n- [ ] Z2 todo\n- [ ] Z3 todo\n' > todo.md; git add -A; git commit -qm z3a
 "$ZERO" todo-list > "$TZR/z3a.out" 2>&1
 # nothing skipped
-check "Z3a lines" "$(wc -l < "$TZR/z3a.out" | tr -d ' ')" "3"
+check "Z3a lines" "$(wc -l < "$TZR/z3a.out" | tr -d ' ')" "5"
 printf -- '- [x] Z1 done\n- [x] Z2 done\n- [x] Z3 done\n' > todo.md; git commit -qam z3b
 "$ZERO" todo-list > "$TZR/z3b.out" 2>&1; rc=$?
 check "Z3b exit" "$rc" "0"
@@ -87,8 +89,8 @@ printf -- '- [%s] Z1 landed other\n- [x] Z2 done\n- [x] Z3 done\n- [x] Z4 done\n
 git add -A; git commit -qm z4
 LC_ALL=en_US.UTF-8 "$ZERO" todo-list > "$TZR/z4.out" 2>&1
 echo "drawn Z4 symbol: $SYM (quote it when reporting a failure)"
-check "Z4 lines" "$(wc -l < "$TZR/z4.out" | tr -d ' ')" "4"
-check "Z4 first" "$(head -1 "$TZR/z4.out")" "- [x] Z4 done"
+check "Z4 lines" "$(wc -l < "$TZR/z4.out" | tr -d ' ')" "5"
+check "Z4 first" "$(sed -n 2p "$TZR/z4.out")" "- [x] Z4 done"
 # the symbol never anchors the cut
 check "Z4 no cut" "$(grep -c 'Z1 landed other' "$TZR/z4.out")" "0"
 # Z4 PASS — whichever symbol was drawn, the Landed `Z1` line sits three lines before the first

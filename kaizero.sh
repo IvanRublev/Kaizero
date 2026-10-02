@@ -5420,61 +5420,162 @@ todo_tail() {
     }'
 }
 
-todo_list() {
-  local raw
-  raw=$(todo_tail)
-  [ -n "$raw" ] || return 0
-
-  local ids=() id
-  while IFS= read -r id; do ids+=("$id"); done < <(printf '%s\n' "$raw" | awk '
+# todo_scan: every checkbox line of the Release Todo List on the coordination base, fence-aware,
+# as typed records: `U<id>\t<line>` per unchecked line, `L<id>` per Landed (any non-`[ ]`) line,
+# `C<line>` per leading context line (up to two before the first unchecked box), `P<id>\t<n>` per
+# checkbox line = how many unchecked lines precede the position just after it.
+todo_scan() {
+  git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" | awk '
     function unwraplink(s) {
       if (s ~ /^\[[^]]+\]\([^)]+\)$/) { sub(/^\[/, "", s); sub(/\]\(.*$/, "", s) }
       return s
     }
-    /^[ \t]*- \[ \]/ {
-      line = $0; sub(/^[ \t]*- \[ \][ \t]*/, "", line)
-      n = split(line, a, /[ \t]+/)
-      print (n > 0 ? unwraplink(a[1]) : "")
-    }')
+    /^[ \t]*```/ { fence = !fence; next }
+    fence        { next }
+    /^[ \t]*- \[[^]]+\]/ {
+      t = $0; sub(/^[ \t]*- \[[^]]+\][ \t]*/, "", t)
+      split(t, a, /[ \t]+/); id = unwraplink(a[1])
+      all[++n] = $0
+      if ($0 ~ /^[ \t]*- \[ \]/) {
+        if (!cut) cut = n
+        printf "U%s\t%s\n", id, $0; u++
+        printf "P%s\t%d\n", id, u
+      } else {
+        if (id != "") printf "L%s\n", id
+        printf "P%s\t%d\n", id, u
+      }
+    }
+    END {
+      if (!cut) exit 0
+      start = cut - 2; if (start < 1) start = 1
+      for (i = start; i < cut; i++) print "C" all[i]
+    }'
+}
 
-  local ok_path=() j=0 cls p
-  if [ "${#ids[@]}" -gt 0 ]; then
-    # the resolved list the loop's resolve-tasks step published, when it still matches; otherwise
-    # the live resolution this function always did, which writes nothing.
-    while IFS=$'\t' read -r _ cls p; do
-      [ "$cls" = ok ] && ok_path[j]="$p"
-      j=$((j+1))
-    done < <(resolved_lines "${ids[@]}" || printf '%s\n' "${ids[@]}" | resolve_task_ids)
+# todo_resolve_from IDX COUNT — fills todo_list's rset/rcls/rpath for the not yet resolved unchecked
+# ids IDX..IDX+COUNT-1 with one live resolve_task_ids call (uses todo_list's locals, dynamic scope).
+todo_resolve_from() {
+  local k i end=$(( $1 + $2 )) bids=() bidx=() cls p _id
+  [ "$end" -gt "$nu" ] && end=$nu
+  for (( k = $1; k < end; k++ )); do
+    [ -n "${rset[k]:-}" ] && continue
+    if [ -z "${uids[k]}" ]; then rset[k]=1; rcls[k]=missing; continue; fi
+    bids+=("${uids[k]}"); bidx+=("$k")
+  done
+  [ "${#bids[@]}" -gt 0 ] || return 0
+  k=0
+  while IFS=$'\t' read -r _id cls p; do
+    i=${bidx[k]}; rset[i]=1; rcls[i]=$cls; rpath[i]=$p; k=$((k+1))
+  done < <(printf '%s\n' "${bids[@]}" | resolve_task_ids)
+}
+
+# todo-list [ID]: one page of the Release Todo List's unchecked Tasks (ISSUE 080). The first page
+# (no ID) is the Landed line, the leading context lines, every held Task and the first three free
+# Tasks; `todo-list ID` is the held Tasks and the next three free Tasks after position ID, whatever
+# state ID is in. A free Task is unchecked, held by no live peer (held_ids) and resolves to exactly
+# one Task file; an unchecked Task without a usable file is printed bare, uncounted, within the
+# page's span. The last line names the id to continue after, or `none`. Task file paths come from
+# the resolved list (BUG 078) when it is current, else from live resolution only as far as the
+# page reaches. A held line carries " ⚒️ held by a live peer" behind its id token (BUG 079).
+todo_list() {
+  local cursor="${1-}" rec rest landed=() ctx=() uids=() ulines=() pids=() pstart=() scan
+  scan=$(todo_scan) || return $?
+  while IFS= read -r rec; do
+    rest=${rec:1}
+    case "${rec:0:1}" in
+      U) uids+=("${rest%%$'\t'*}"); ulines+=("${rest#*$'\t'}") ;;
+      L) landed+=("$rest") ;;
+      C) ctx+=("$rest") ;;
+      P) pids+=("${rest%%$'\t'*}"); pstart+=("${rest#*$'\t'}") ;;
+    esac
+  done <<<"$scan"
+  local nu=${#ulines[@]}
+  [ "$nu" -gt 0 ] || return 0
+
+  local start=0 k
+  if [ -n "$cursor" ]; then
+    start=-1
+    for (( k = 0; k < ${#pids[@]}; k++ )); do
+      [ "${pids[k]}" = "$cursor" ] && { start=${pstart[k]}; break; }
+    done
+    if [ "$start" -lt 0 ]; then
+      printf 'Task %s is not on the Todo List, start with: todo-list\n' "$cursor"
+      return 0
+    fi
+  fi
+
+  # the resolved list the loop's resolve-tasks step published, when it still matches; otherwise
+  # live resolution, chunk by chunk, writing nothing.
+  local rset=() rcls=() rpath=() cls p _id nonempty=()
+  for (( k = 0; k < nu; k++ )); do [ -n "${uids[k]}" ] && nonempty+=("${uids[k]}"); done
+  if [ "${#nonempty[@]}" -gt 0 ]; then
+    k=0
+    while IFS=$'\t' read -r _id cls p; do
+      while [ -z "${uids[k]}" ]; do rset[k]=1; rcls[k]=missing; k=$((k+1)); done
+      rset[k]=1; rcls[k]=$cls; rpath[k]=$p; k=$((k+1))
+    done < <(resolved_lines "${nonempty[@]}")
   fi
 
   # held tag: live fleet state, computed on every call, never cached (BUG 079). A failed scan
-  # leaves the list untagged — the tag is advice, claim stays the authority.
-  local held tag=$' \xe2\x9a\x92\xef\xb8\x8f held by a live peer' hid pre tok post link_re='^\[([^]]+)\]\([^)]+\)$'
+  # leaves every Task free and untagged — the tag is advice, claim stays the authority.
+  local held hflag=() tag=$' \xe2\x9a\x92\xef\xb8\x8f held by a live peer'
   if ! held=$(held_ids); then
     echo "zero.sh todo-list: warning: held-peer scan failed, held Tasks are not tagged" >&2
     held=""
   fi
-  held=$'\n'"$held"$'\n'
+  if [ -n "$held" ]; then
+    held=$'\n'"$held"$'\n'
+    for (( k = 0; k < nu; k++ )); do
+      [ -n "${uids[k]}" ] && [[ "$held" == *$'\n'"$(sanitize_id "${uids[k]}")"$'\n'* ]] && hflag[k]=1
+    done
+  fi
 
-  j=0
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[[:space:]]*-\ \[\ \] ]]; then
-      if [ "${#held}" -gt 2 ] && [[ "$line" =~ ^([[:space:]]*-\ \[\ \][[:space:]]*)([^[:space:]]+)(.*)$ ]]; then
-        pre=${BASH_REMATCH[1]}; tok=${BASH_REMATCH[2]}; post=${BASH_REMATCH[3]}
-        hid=$tok
-        [[ "$tok" =~ $link_re ]] && hid=${BASH_REMATCH[1]}
-        [[ "$held" == *$'\n'"$(sanitize_id "$hid")"$'\n'* ]] && line="$pre$tok$tag$post"
-      fi
-      if [ -n "${ok_path[j]:-}" ]; then
-        printf '%s  %s\n' "$line" "${ok_path[j]}"
-      else
-        printf '%s\n' "$line"
-      fi
-      j=$((j+1))
-    else
-      printf '%s\n' "$line"
+  local keep=() late=() nfree=0 lastfree="" more=0
+  for (( k = 0; k < nu; k++ )); do
+    [ -n "${hflag[k]:-}" ] && { keep[k]=1; todo_resolve_from "$k" 1; }
+  done
+  for (( k = start; k < nu; k++ )); do
+    [ -n "${hflag[k]:-}" ] && continue
+    todo_resolve_from "$k" 4
+    if [ "${rcls[k]}" = ok ]; then
+      if [ "$nfree" -lt 3 ]; then nfree=$((nfree+1)); lastfree=${uids[k]}; keep[k]=1
+      else more=1; break; fi
+    elif [ "$nfree" -lt 3 ]; then keep[k]=1
+    else late+=("$k")
     fi
-  done <<<"$raw"
+  done
+  # no free Task follows the page: its unusable Tasks past the third free one have no later page
+  if [ "$more" = 0 ]; then for k in ${late[@]+"${late[@]}"}; do keep[k]=1; done; fi
+
+  local line pre tok post
+  if [ -z "$cursor" ]; then
+    [ "${#landed[@]}" -gt 0 ] && printf 'Landed: %s\n' "${landed[*]}"
+    for line in "${ctx[@]+"${ctx[@]}"}"; do printf '%s\n' "$line"; done
+  fi
+  for (( k = 0; k < nu; k++ )); do
+    [ -n "${keep[k]:-}" ] || continue
+    line=${ulines[k]}
+    if [ -n "${hflag[k]:-}" ] && [[ "$line" =~ ^([[:space:]]*-\ \[\ \][[:space:]]*)([^[:space:]]+)(.*)$ ]]; then
+      pre=${BASH_REMATCH[1]}; tok=${BASH_REMATCH[2]}; post=${BASH_REMATCH[3]}
+      line="$pre$tok$tag$post"
+    fi
+    if [ "${rcls[k]:-}" = ok ]; then printf '%s  %s\n' "$line" "${rpath[k]}"; else printf '%s\n' "$line"; fi
+  done
+  if [ "$more" = 1 ]; then printf 'Next page: todo-list %s\n' "$lastfree"; else echo 'Next page: none'; fi
+}
+
+# task-file ID: the Task file of the Task with id ID, Landed or not, found by file-name matching of
+# that one id as claim finds it. A lookup that finds none says why on stdout and still exits 0.
+task_file() {
+  local id="${1-}" tid tcls trest on=0 rid _t
+  while IFS=$'\t' read -r rid _t; do [ "$rid" = "$id" ] && { on=1; break; }; done < <(todo_lines)
+  if [ "$on" = 0 ]; then echo "No Task file for $id: not on the Todo List"; return 0; fi
+  IFS=$'\t' read -r tid tcls trest < <(printf '%s\n' "$id" | resolve_task_ids)
+  case "$tcls" in
+    ok)        printf '%s\n' "$trest" ;;
+    ambiguous) echo "No Task file for $id: several files match" ;;
+    *)         echo "No Task file for $id: no file matches" ;;
+  esac
 }
 
 # raw id \t title text, one per line, for every checkbox line on the coordination base's Release
@@ -6468,13 +6569,14 @@ case "${1:-}" in
   validate-ids)           validate_ids ;;
   validate-tasks)         validate_tasks ;;
   resolve-tasks)          resolve_tasks ;;
-  todo-list)              todo_list ;;
+  todo-list)              todo_list "${2-}" ;;
+  task-file)              task_file "${2-}" ;;
   unchecked-todos)        unchecked_todos ;;
   target-branch)          target_branch "$2" "$3" ;;
   target-branches-for-id) target_branches_for_id "$2" ;;
   box-symbol-on-base)     box_symbol_on_base "$2" ;;
   sync-mrs)               sync_mrs ;;
-  *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | resolve-tasks | todo-list | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
+  *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | resolve-tasks | todo-list [ID] | task-file ID | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
 esac
 ZERO_EOF
     } > "$gitdir/zero.sh"
@@ -6526,10 +6628,15 @@ Keep these facts in mind:
     `cd "$wt" && …` in a SINGLE command.
 
 === ALGORITHM (one Task, then end your turn) ===
-1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the tail of the Release Todo List,
-   from the two lines before the first Unlanded Task to the end. Tasks are GitHub-style Markdown
-   checkboxes, one per line, each carrying an id as the FIRST whitespace-delimited token after the
-   checkbox:
+1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the first page of the Release
+   Todo List: a `Landed:` line with the ids of every Landed Task (ids only; a link-shaped id is its
+   bracketed label), the two lines before the first Unlanded Task, every Unlanded Task a live peer
+   holds, and the first three free Tasks (Unlanded, held by nobody, one Task file resolved). Its last
+   line names where the next page starts: `Next page: todo-list ID`, or `Next page: none` when no
+   free Task follows. Take the next page — run `@@ZERO_SH@@ todo-list ID` with exactly that id — only
+   when none of the free Tasks seen so far can be claimed and the last line is not `Next page: none`.
+   Tasks are GitHub-style Markdown checkboxes, one per line, each carrying an id as the FIRST
+   whitespace-delimited token after the checkbox:
        - [ ] SMTH-855 some Task Unlanded /repo/tasks/SMTH-855.md  ← UNCHECKED = still to do
        - [ ] SMTH-856 ⚒️ held by a live peer some Task /repo/tasks/SMTH-856.md  ← held = not a candidate
        - [x] 7.a some Task already Landed         ← CHECKED   = Landed, skip it
@@ -6545,8 +6652,8 @@ Keep these facts in mind:
        file (the path stays on the line) when that helps you judge whether a candidate depends on it;
      - a refused `claim` on an untagged candidate still means skip to the next candidate, because
        two sessions can pick the same free Task in the same moment.
-   When every unchecked line is tagged, nothing is claimable: end the session as you would after
-   walking the whole list without claiming.
+   When nothing seen can be claimed and the last line says `Next page: none`, end the session as
+   you would after walking the whole list without claiming.
        non-zero exit → STOP IMMEDIATELY: print `@@ZERO_SH@@ todo-list`'s stderr verbatim as the
                         reason and end your turn without claiming anything.
 2. For each candidate task_id, in order:
@@ -6565,6 +6672,11 @@ Keep these facts in mind:
            area" is NOT evidence.
       iv.  A prerequisite whose box is anything but `[ ]` never blocks — its code is merged, its
            output exists (a `[?]` is Landed code awaiting review, not missing code).
+      v.   Judge this Task against every unchecked Task: the Landed ids, the held Tasks and the free
+           Tasks seen so far. A Task named by id that is on the `Landed:` line never blocks; read its
+           file with `@@ZERO_SH@@ task-file ID` when you need to understand what it produced. When
+           this Task's body names an artifact whose producer is not among those, take further pages
+           until you find the producer or the last line says `Next page: none`.
       - Any inbound edge to an unchecked Task → skip to the next task_id.
       - No such edge (every claimed edge is either to a checked Task or unquotable)
         → continue to step b.
@@ -6729,10 +6841,15 @@ Keep these facts in mind:
     `cd "$wt" && …` in a SINGLE command.
 
 === ALGORITHM (one Task, then end your turn) ===
-1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the tail of the Release Todo List,
-   from the two lines before the first Unlanded Task to the end. Tasks are GitHub-style Markdown
-   checkboxes, one per line, each carrying an id as the FIRST whitespace-delimited token after the
-   checkbox:
+1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the first page of the Release
+   Todo List: a `Landed:` line with the ids of every Landed Task (ids only; a link-shaped id is its
+   bracketed label), the two lines before the first Unlanded Task, every Unlanded Task a live peer
+   holds, and the first three free Tasks (Unlanded, held by nobody, one Task file resolved). Its last
+   line names where the next page starts: `Next page: todo-list ID`, or `Next page: none` when no
+   free Task follows. Take the next page — run `@@ZERO_SH@@ todo-list ID` with exactly that id — only
+   when none of the free Tasks seen so far can be claimed and the last line is not `Next page: none`.
+   Tasks are GitHub-style Markdown checkboxes, one per line, each carrying an id as the FIRST
+   whitespace-delimited token after the checkbox:
        - [ ] SMTH-855 some Task Unlanded /repo/tasks/SMTH-855.md  ← UNCHECKED = still to do
        - [ ] SMTH-856 ⚒️ held by a live peer some Task /repo/tasks/SMTH-856.md  ← held = not a candidate
        - [x] 7.a some Task already Landed         ← CHECKED   = Landed, skip it
@@ -6750,8 +6867,8 @@ Keep these facts in mind:
        file (the path stays on the line) when that helps you judge whether a candidate depends on it;
      - a refused `claim` on an untagged candidate still means skip to the next candidate, because
        two sessions can pick the same free Task in the same moment.
-   When every unchecked line is tagged, nothing is claimable: end the session as you would after
-   walking the whole list without claiming.
+   When nothing seen can be claimed and the last line says `Next page: none`, end the session as
+   you would after walking the whole list without claiming.
        non-zero exit → STOP IMMEDIATELY: print `@@ZERO_SH@@ todo-list`'s stderr verbatim as the
                         reason and end your turn without claiming anything.
 2. For each candidate task_id, in order:
@@ -6772,6 +6889,11 @@ Keep these facts in mind:
            `[ ]` (not started), `[↑]` (in review, not merged yet), `[⛔]` (declined) and `[?]`
            (needs a human) — and any other symbol — are all NOT in the base yet: an inbound edge
            to any of them blocks this Task. Skip it and try the next id.
+      v.   Judge this Task against every unchecked Task: the Landed ids, the held Tasks and the free
+           Tasks seen so far. A Task named by id that is on the `Landed:` line never blocks; read its
+           file with `@@ZERO_SH@@ task-file ID` when you need to understand what it produced. When
+           this Task's body names an artifact whose producer is not among those, take further pages
+           until you find the producer or the last line says `Next page: none`.
       - Any inbound edge to a Task whose box is not `[x]` → skip to the next task_id.
       - No such edge (every claimed edge is either to an `[x]` Task or unquotable)
         → continue to step b.
