@@ -125,6 +125,11 @@ printf -- '- [x] A a\n' > todo.md; git add -A; git commit -qm g
 check "G2 no unchecked prints nothing" "$("$ZERO" todo-list ANY | wc -c | tr -d ' ')" "0"
 check "G2 no landed line out of an all-landed list" "$("$ZERO" todo-list | wc -c | tr -d ' ')" "0"
 
+# unusable Task after the last free Task is printed on the last page
+newrepo tailnf
+printf -- '- [ ] A a\n- [ ] B b\n- [ ] C c\n- [ ] N nofile\n' > todo.md; body A; body B; body C; git add -A; git commit -qm t
+check "G3 no-file Task after third free printed, then none" "$("$ZERO" todo-list | tail -n 2 | tr '\n' '|')" "- [ ] N nofile|Next page: none|"
+
 # --- the 349-Task list: short first page; live resolution stops early
 newrepo big
 { printf -- '- [x] D1 done\n- [x] D2 done\n'; for i in $(seq 1 349); do printf -- '- [ ] B%s big %s\n' "$i" "$i"; body "B$i"; done; } > todo.md

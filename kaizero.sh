@@ -5530,7 +5530,7 @@ todo_list() {
     done
   fi
 
-  local keep=() nfree=0 lastfree="" more=0
+  local keep=() late=() nfree=0 lastfree="" more=0
   for (( k = 0; k < nu; k++ )); do
     [ -n "${hflag[k]:-}" ] && { keep[k]=1; todo_resolve_from "$k" 1; }
   done
@@ -5541,8 +5541,11 @@ todo_list() {
       if [ "$nfree" -lt 3 ]; then nfree=$((nfree+1)); lastfree=${uids[k]}; keep[k]=1
       else more=1; break; fi
     elif [ "$nfree" -lt 3 ]; then keep[k]=1
+    else late+=("$k")
     fi
   done
+  # no free Task follows the page: its unusable Tasks past the third free one have no later page
+  if [ "$more" = 0 ]; then for k in ${late[@]+"${late[@]}"}; do keep[k]=1; done; fi
 
   local line pre tok post
   if [ -z "$cursor" ]; then
