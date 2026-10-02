@@ -219,7 +219,7 @@ Kaizero owns the mechanics and leaves the learning to you. It drills the *form* 
 
 The kata is a strict algorithm every instance runs, one Task per `claude` session:
 
-1. Find & validate — collect Tasks with `zero.sh todo-list`, read from the committed Release Todo List blob, never the working tree; a missing or duplicate id stops the loop.
+1. Find & validate — collect Tasks with `zero.sh todo-list`, read from the committed Release Todo List blob, never the working tree; a missing or duplicate id stops the loop; each Task's file path comes from a resolved list the loop rebuilds with `zero.sh resolve-tasks` whenever a Task file name or an unchecked id changes.
 2. Judge independence by evidence — blocked only if the body quotably consumes an *unchecked* Task's output; adjacency is not a dependency.
 3. Claim & re-check — one Task per git worktree (branch = claim), then guard against a peer who already Landed it.
 4. Implement, commit — scoped to that Task; the Todo List is read-only, never edited by the agent.
@@ -514,7 +514,7 @@ KAIZERO_QUOTA_RETRY=30m kaizero todo.md
 KAIZERO_DEPENDENCY_WAIT=20m kaizero todo.md
 ```
 
-**`KAIZERO_PROGRESS_DELAY`** — how long `zero.sh validate-tasks` has been walking before its progress bar appears, as a plain count of seconds. Default `2`; `0` draws from the first id resolved. The delay exists so a short walk draws nothing at all: a bar that appears and clears again inside a frame or two is noise, not progress. Raise it to push the bar out to only the walks you consider slow, or set `0` to watch every walk from its first tick. The bar needs a terminal on kaizero's display descriptor — where the walk is logged instead, its plain lines are written from the start and this delay never applies, because a log is a record of what ran and a line cannot flicker. A value that is not a plain count of seconds falls back to the default silently: both of `zero.sh`'s own streams are captured by its callers and read back as findings, so a complaint about a bad value would fail the very walk it commented on.
+**`KAIZERO_PROGRESS_DELAY`** — how long `zero.sh validate-tasks` or `zero.sh resolve-tasks` has been walking before its progress bar appears, as a plain count of seconds. Default `2`; `0` draws from the first id resolved. The delay exists so a short walk draws nothing at all: a bar that appears and clears again inside a frame or two is noise, not progress. Raise it to push the bar out to only the walks you consider slow, or set `0` to watch every walk from its first tick. The bar needs a terminal on kaizero's display descriptor — where the walk is logged instead, its plain lines are written from the start and this delay never applies, because a log is a record of what ran and a line cannot flicker. A value that is not a plain count of seconds falls back to the default silently: both of `zero.sh`'s own streams are captured by its callers and read back as findings, so a complaint about a bad value would fail the very walk it commented on.
 
 ```sh
 KAIZERO_PROGRESS_DELAY=0 kaizero todo.md
