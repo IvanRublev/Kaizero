@@ -947,10 +947,10 @@ while true; do
     cd "$TARGET_ROOT"
     # cleared BEFORE the launch, never after the exit: a value left by the previous iteration's
     # kill would otherwise be read as this one's cause.
-    : > "$EXIT_REASON_FILE"
+    atomic_put "$EXIT_REASON_FILE" </dev/null
     # Cleared before THIS launch, never after — a marker left by a prior (already killed)
     # launch must never be read as this launch's own first turn already being safe to end.
-    : > "$SAFE_TO_EXIT_FILE"
+    atomic_put "$SAFE_TO_EXIT_FILE" </dev/null
     # Pin the session id before launch, so its transcript path is known immediately —
     # every / in the absolute cwd becomes a literal -, under ~/.claude/projects, named
     # <session-id>.jsonl (Claude Code's own convention).
@@ -1570,7 +1570,7 @@ INSTANCE_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)/instance"
 # register this instance (liveness marker), remove it on any exit, then GC dead runs' time-files.
 # EXIT fires on normal end, MAX_LOOPS break, and after the INT trap's `exit 0` — marker always cleared.
 # The target-side marker (empty path before it is set) is cleared the same way.
-mkdir -p "$INSTANCE_DIR"; printf '%s\n%s\n' "$$" "$(proc_start "$$")" > "$INSTANCE_DIR/$INSTANCE_ID"
+mkdir -p "$INSTANCE_DIR"; printf '%s\n%s\n' "$$" "$(proc_start "$$")" | atomic_put "$INSTANCE_DIR/$INSTANCE_ID" "$INSTANCE_DIR.$INSTANCE_ID"
 # BUG 057: the session record is per-instance state exactly like the instance marker above — every
 # exit path (Ctrl+C, TERM, MAX_LOOPS, IDFAIL) must leave none of this instance's identity behind.
 trap 'rm -f "$INSTANCE_DIR/$INSTANCE_ID" "$TARGET_INST_MARKER" "$SESSION_RECORD_FILE" "$SESSION_LOG_FILE" 2>/dev/null' EXIT
@@ -1597,7 +1597,8 @@ else
 fi
 
 STOP_HOOK="$GITDIR_ABS/compact-exit-hook.sh"
-# Stop hook: emitted as TWO heredocs into the same file. The first is UNQUOTED so
+# Stop hook: emitted as TWO heredocs into one group, published whole by atomic_put (head and body
+# land together, with the executable bit). The first is UNQUOTED so
 # $CONTEXT_THRESHOLDS/$CONTEXT_THRESHOLD_DEFAULT interpolate; the second (unchanged, `>>`) stays
 # QUOTED — its body is full of live `$`. Four characters in CONTEXT_THRESHOLDS's VALUE cannot
 # survive the unquoted heredoc: `$` and a backtick would expand, a backslash before any of
@@ -1607,17 +1608,17 @@ STOP_HOOK="$GITDIR_ABS/compact-exit-hook.sh"
 # it that way. Baking the table into the emitted hook — unlike KAIZERO_TRANSCRIPTS, which the
 # body below still refuses to bake in — is safe because this value is per-SCRIPT-VERSION, not
 # per-instance: every peer running the SAME kaizero.sh writes the SAME bytes to this shared
-# path, so concurrent writers racing last-writer-wins is a no-op. Peers on DIFFERENT script
+# path, and each write is a whole-file rename, so a reader never sees a half-written hook. Peers on DIFFERENT script
 # versions overwrite each other's table on every launch — benign (whichever version wrote last is
 # what the next turn reads), and deliberately left unlocked.
-cat >"$STOP_HOOK" <<HOOK_HEAD
+{ cat <<HOOK_HEAD
 #!/usr/bin/env bash
 CONTEXT_THRESHOLDS='$CONTEXT_THRESHOLDS'
 CONTEXT_THRESHOLD_DEFAULT=$CONTEXT_THRESHOLD_DEFAULT
 TERMINATOR_SH='$GITDIR_ABS/terminator.sh'
-$(declare -f newest_relevant_line newest_record_uuid)
+$(declare -f newest_relevant_line newest_record_uuid atomic_put)
 HOOK_HEAD
-cat >>"$STOP_HOOK" <<'HOOK_EOF'
+cat <<'HOOK_EOF'
 # Stop hook. Fires post-turn (transcript already persisted). Couples to the transcript's
 # `message.usage` schema (the same shape read_tokens_total parses, see its own comment) — no
 # other hook, no state file. The context-rot guard below reads only the last 256 KiB of the
@@ -1660,7 +1661,7 @@ if [ -n "${KAIZERO_EXIT_REASON:-}" ]; then
 fi
 # BUG-071: content is the transcript's own newest record uuid, not an empty touch — turn_tree_state
 # compares this against the transcript's own newest uuid at judgment time, never mtime.
-[ -n "$mf" ] && { printf '%s' "$(newest_record_uuid "$tp")" > "$mf"; } 2>/dev/null
+[ -n "$mf" ] && { printf '%s' "$(newest_record_uuid "$tp")" | atomic_put "$mf"; } 2>/dev/null
 # process start-time (via ps): pins identity so a RECYCLED pid isn't mistaken for the same session.
 # Spelled identically in kaizero.sh's own copy and in the emitted zero.sh — see either's comment.
 # BUG 058k: the ONLY thing this hook may signal is the pid named by KAIZERO_SESSION_RECORD — the
@@ -1746,7 +1747,7 @@ fi
 term_owner 0
 exit 0
 HOOK_EOF
-chmod +x "$STOP_HOOK"
+} | atomic_put "$STOP_HOOK" "" +x
 
 # inline settings JSON merged over global config via --settings. git-dir/worktree paths have no
 # JSON metachars, so bare interpolation is safe. autoMode.environment (with "$defaults" so the
@@ -2697,7 +2698,7 @@ session_record_write() {   # $1=pid $2=epoch
   local pid=$1 epoch=$2 st
   st="$(proc_start "$pid")"
   [ -n "$st" ] || return 1
-  printf '%s\n%s\n%s\n' "$pid" "$st" "$epoch" > "$SESSION_RECORD_FILE"
+  printf '%s\n%s\n%s\n' "$pid" "$st" "$epoch" | atomic_put "$SESSION_RECORD_FILE"
 }
 session_record_clear() { rm -f "$SESSION_RECORD_FILE" 2>/dev/null || true; }
 # TASK-065: print every line zero.sh appended to SESSION_LOG_FILE since the last call, in the
@@ -2743,7 +2744,7 @@ cleanup_orphan_time_files() {
       case "$f" in *.lock|*.tmp) continue;; esac           # sidecars swept with their base file below
       id="${f##*/"$pre"-"$slug"-}"
       [ -f "$INSTANCE_DIR/$id" ] && continue                # id still has a (live) marker → keep
-      rm -f "$f" "$f.lock" "$f.tmp"
+      rm -f "$f" "$f.lock" "$f.tmp" "$f".*.tmp
     done
   done
   for f in "$gc/transcripts-$slug-"*; do                  # same rule for the token-accounting lists
@@ -2790,7 +2791,7 @@ register_on_target() {
       exit 1
     fi
   done
-  { printf '%s\n%s\n%s\n%s\n' "$$" "$(proc_start "$$")" "$mine" "$MR_MODE" > "$dir/$INSTANCE_ID"; } 2>/dev/null \
+  { printf '%s\n%s\n%s\n%s\n' "$$" "$(proc_start "$$")" "$mine" "$MR_MODE" | atomic_put "$dir/$INSTANCE_ID" "$dir.$INSTANCE_ID"; } 2>/dev/null \
     || degraded=1
   [ "$locked" = 1 ] && exec 5>&-
   # reported once, however many of the steps above failed (directory, lock, marker)
@@ -2853,6 +2854,26 @@ register_target() {
   exec 6>&-
 }
 
+# BUG 082: replace a file other processes execute or read as a whole — stdin goes to a complete
+# temp file (final permissions applied) that one `mv -f` then renames onto $1, so a reader sees the
+# old or the new file, never a prefix or an empty one. $2 = temp-name stem (default $1): the temp
+# is "$2.<pid>.tmp", which the common-dir cleanup skips and the session/instance/hooks listings
+# never see; a stem left by a dead writer is removed first. $3 = chmod mode. A failed write leaves
+# $1 untouched and no temp behind. Emitted into zero.sh, terminator.sh and the Stop hook with
+# `declare -f`, so every writer shares this one body.
+atomic_put() {
+  local final=$1 stem=${2:-$1} mode=${3:-} s p tmp
+  tmp="$stem.$$.tmp"
+  for s in "$stem".*.tmp; do
+    [ -e "$s" ] || continue
+    p=${s#"$stem".}; p=${p%.tmp}
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null || rm -f "$s"
+  done
+  { cat > "$tmp" && { [ -z "$mode" ] || chmod "$mode" "$tmp"; } && mv -f "$tmp" "$final"; } \
+    || { rm -f "$tmp" 2>/dev/null; return 1; }
+}
+
 # TASK-059e: write <repo>/.git/hooks/prepare-commit-msg once per repo, given that repo's root as
 # $1 — git worktrees share one common git dir's hooks/, so one install per repo covers every
 # worktree kaizero.sh creates there. Appends the Kaizero co-author trailer only to a commit made
@@ -2865,7 +2886,7 @@ register_target() {
 write_prepare_commit_msg_hook() {
     local gitdir hook; gitdir="$(cd "$1" && cd "$(git rev-parse --git-dir)" && pwd)"
     hook="$gitdir/hooks/prepare-commit-msg"
-    cat >"$hook" <<'HOOK_EOF'
+    cat <<'HOOK_EOF' | atomic_put "$hook" "" +x
 #!/usr/bin/env bash
 [ -n "${KAIZERO_INSTANCE:-}" ] || exit 0
 [ -n "${KAIZERO_NO_CO_AUTHORSHIP:-}" ] && exit 0
@@ -2873,7 +2894,6 @@ msg_file="$1"
 grep -qF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg_file" 2>/dev/null && exit 0
 printf '\n\nCo-authored-by: Kaizero <noreply@kaizero.sh>\n' >> "$msg_file"
 HOOK_EOF
-    chmod +x "$hook"
 }
 
 # BUG 058k: write .git/terminator.sh, the ONE shutdown sequence on_term/on_hup/arm_watchdog (below,
@@ -2896,6 +2916,7 @@ write_terminator_sh() {
         printf '#!/usr/bin/env bash\n'
         printf 'set -u\n'   # no -e: every step below already checks its own failure explicitly
         printf 'WATCHDOG_GRACE=%s\n' "$WATCHDOG_GRACE"
+        declare -f atomic_put
         cat <<'TERMINATOR_EOF'
 proc_start() { ps -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1;print}'; }
 # $1=record path $2=want_epoch. Same three-way (pid/proc_start/epoch) check every other copy in
@@ -2969,7 +2990,7 @@ fi
     [ -n "$EXIT_REASON_FILE" ] || return 0
     { if [ -n "$CODE" ]; then printf '%s\n' "$CODE"; else printf '\n'; fi
       local l; for l in "${STATUS_LINES[@]:-}"; do [ -n "$l" ] && printf '%s\n' "$l"; done
-    } > "$EXIT_REASON_FILE" 2>/dev/null || true
+    } | atomic_put "$EXIT_REASON_FILE" 2>/dev/null || true
   }
   append_status() { STATUS_LINES+=("$1"); write_reason_file; }
   # EXIT trap first, before any other step: guarantees SOME final write records this sequence
@@ -3048,8 +3069,7 @@ fi
 } &
 exit 0
 TERMINATOR_EOF
-    } > "$gitdir/terminator.sh"
-    chmod +x "$gitdir/terminator.sh"
+    } | atomic_put "$gitdir/terminator.sh" "" +x
 }
 
 # write .git/zero.sh (the per-Task acquire/release/merge helper the zero prompt calls) with
@@ -3093,6 +3113,7 @@ write_zero_sh() {
         printf '# shellcheck disable=SC2034\nMR_MODE=%q\n' "$MR_MODE"
         printf '# shellcheck disable=SC2034\nFORGE=%q\n' "${FORGE:-}"
         printf '# shellcheck disable=SC2034\nORIGIN_URL=%q\n' "${ORIGIN_URL:-}"
+        declare -f atomic_put
         cat <<'ZERO_EOF'
 # neither the caller's cwd nor an inherited git environment variable may pick the repository a
 # git call below answers for — GIT_DIR/GIT_COMMON_DIR outrank both cwd and -C — so they are
@@ -3165,7 +3186,7 @@ add_todos_done() {
 safe_to_exit_file() { printf '%s/safe-to-exit-%s-%s' "$COORD_GITDIR" "${COORD_BASE//\//-}" "$INSTANCE_ID"; }
 # touch it: called from every path here that reaches a definitive "OK to end this session"
 # outcome for the CURRENT instance — a landed task or a confirmed-empty board.
-mark_safe_to_exit() { printf '1\n' > "$(safe_to_exit_file)"; }
+mark_safe_to_exit() { printf '1\n' | atomic_put "$(safe_to_exit_file)"; }
 # add $1 (positive int) to counter file $2, under a per-file lock.
 add_counter() {
   local add=$1 f=$2 cur=0
@@ -3555,7 +3576,7 @@ session_current() {                              # $1=pid → its current Task i
   { read -r _; read -r cur; } < "$f" 2>/dev/null || true
   printf '%s' "${cur:-none}"
 }
-set_current() { mkdir -p "$SESSION_DIR"; printf '%s\n%s\n' "$OWN_START" "$1" > "$(marker "$OWNER_PID")"; }
+set_current() { mkdir -p "$SESSION_DIR"; printf '%s\n%s\n' "$OWN_START" "$1" | atomic_put "$(marker "$OWNER_PID")" "$COORD_GITDIR/session-marker.$OWNER_PID"; }
 # GC: unlink markers whose session is gone or whose pid was recycled. Cheap — piggybacks acquire's
 # scan. Others reap the dead; a dead session can't clean its own file.
 reap_dead_sessions() {
@@ -3595,7 +3616,7 @@ wt_for_branch_in() {
 # A claim whose .owner cannot be written is not a claim: the caller must check this
 # return, undo whatever it created, and print no path — otherwise the exclusivity record every
 # other reader trusts is silently absent while this session still believes it holds the task.
-claim_owner() { printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$OWNER_PID" "$OWN_START" "$(date +%s)" "$INSTANCE_ID" "$2" "${3:-}" > "$1/.owner"; }
+claim_owner() { printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$OWNER_PID" "$OWN_START" "$(date +%s)" "$INSTANCE_ID" "$2" "${3:-}" | atomic_put "$1/.owner" "$1.owner"; }
 setup_exclude() {                                # keep the .owner file out of the agent's `git add -A`
   local ex; ex="$(git -C "$1" rev-parse --git-path info/exclude)"; mkdir -p "$(dirname "$ex")"
   grep -qxF '/.owner' "$ex" 2>/dev/null || echo '/.owner' >> "$ex"
@@ -4193,7 +4214,7 @@ inflight_file_for() {
 
 # write/clear the crash marker around each landing `git merge` — pid, start-time, the root that
 # merge touches — so a MERGE_HEAD a crash left behind can be told from a human's own merge.
-mark_inflight()  { INFLIGHT_FILE=$(inflight_file_for "$1"); printf '%s\n%s\n%s\n' "$$" "$(proc_start "$$")" "$1" > "$INFLIGHT_FILE"; }
+mark_inflight()  { INFLIGHT_FILE=$(inflight_file_for "$1"); printf '%s\n%s\n%s\n' "$$" "$(proc_start "$$")" "$1" | atomic_put "$INFLIGHT_FILE"; }
 clear_inflight() { [ -n "${INFLIGHT_FILE:-}" ] && rm -f "$INFLIGHT_FILE"; }
 # true iff root $1's own marker file names it and that entry's pid is no longer that same
 # process — i.e. THIS fleet's own wreck, safe to abort. A marker for a different root, or a live
@@ -5300,7 +5321,7 @@ credit_inflight_time() {
         fi
         # credit to the OWNER instance (line4), not whoever runs the sweep; keep line4 on the anchor
         # advance; line5 (the target worktree) and line6 (the fork point) are carried through untouched.
-        [ -n "$m" ] && { add_todos_time "$((m - owner_acq))" "${owner_inst:-}"; printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$owner_pid" "$owner_start" "$m" "${owner_inst:-}" "${owner_twt:-}" "${owner_fork:-}" > "$wt/.owner"; } ;;
+        [ -n "$m" ] && { add_todos_time "$((m - owner_acq))" "${owner_inst:-}"; printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$owner_pid" "$owner_start" "$m" "${owner_inst:-}" "${owner_twt:-}" "${owner_fork:-}" | atomic_put "$wt/.owner" "$wt.owner"; } ;;
       esac
     fi
     exec 7>&-
@@ -6477,8 +6498,7 @@ case "${1:-}" in
   *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | resolve-tasks | todo-list | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
 esac
 ZERO_EOF
-    } > "$gitdir/zero.sh"
-    chmod +x "$gitdir/zero.sh"
+    } | atomic_put "$gitdir/zero.sh" "" +x
     printf '%sWrote %s/zero.sh (base %s)\n' "$(icon)" "$gitdir" "$COORD_BASE" >&2
 }
 
