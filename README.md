@@ -219,7 +219,7 @@ Kaizero owns the mechanics and leaves the learning to you. It drills the *form* 
 
 The kata is a strict algorithm every instance runs, one Task per `claude` session:
 
-1. Find & validate — collect Tasks with `zero.sh todo-list`, read from the committed Release Todo List blob, never the working tree; a missing or duplicate id stops the loop.
+1. Find & validate — collect Tasks with `zero.sh todo-list`, read from the committed Release Todo List blob, never the working tree; Tasks held by live peers carry the tag `⚒️ held by a live peer` right behind their id; a missing or duplicate id stops the loop.
 2. Judge independence by evidence — blocked only if the body quotably consumes an *unchecked* Task's output; adjacency is not a dependency.
 3. Claim & re-check — one Task per git worktree (branch = claim), then guard against a peer who already Landed it.
 4. Implement, commit — scoped to that Task; the Todo List is read-only, never edited by the agent.
