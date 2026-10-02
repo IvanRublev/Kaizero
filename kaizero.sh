@@ -1597,6 +1597,7 @@ else
 fi
 
 STOP_HOOK="$GITDIR_ABS/compact-exit-hook.sh"
+BRANCH_GUARD_HOOK="$GITDIR_ABS/branch-guard-hook.sh"
 # Stop hook: emitted as TWO heredocs into one group, published whole by atomic_put (head and body
 # land together, with the executable bit). The first is UNQUOTED so
 # $CONTEXT_THRESHOLDS/$CONTEXT_THRESHOLD_DEFAULT interpolate; the second (unchanged, `>>`) stays
@@ -1749,6 +1750,70 @@ exit 0
 HOOK_EOF
 } | atomic_put "$STOP_HOOK" "" +x
 
+# BUG 083: PreToolUse hook on the Bash tool, wired through the same --settings as the Stop hook (so
+# only Kaizero's sessions get it). Refuses a command that would change the branch checked out in a
+# Task worktree — the claim is that branch checked out there, so moving it off hands the Task to a
+# peer's rescue. A Task worktree is a sibling under $WT_PARENT named ts-* (Task) or tt-* (target).
+# Reads the call's JSON with sed, not jq: jq is a prerequisite of the MR modes only.
+{ cat <<HOOK_HEAD
+#!/usr/bin/env bash
+WT_PARENT='$WT_PARENT'
+HOOK_HEAD
+cat <<'HOOK_EOF'
+# BUG 083 branch guard. stdin: the PreToolUse JSON. Deny = JSON on stdout, exit 0; allow = silent.
+in=$(cat)
+cwd=$(printf '%s' "$in" | sed -nE 's/.*"cwd":"(([^"\\]|\\.)*)".*/\1/p')
+cmd=$(printf '%s' "$in" | sed -nE 's/.*"command":"(([^"\\]|\\.)*)".*/\1/p' \
+  | sed -e 's/\\n/;/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
+case "$cmd" in *git*) ;; *) exit 0 ;; esac
+parent=$(cd "$WT_PARENT" 2>/dev/null && pwd -P) || exit 0
+# prints the Task worktree's toplevel when $1 is inside one ($wt/$twt unresolved = the session's own)
+task_wt() {
+  local top
+  case "$1" in '$wt'|'${wt}'|'$twt'|'${twt}') echo "?"; return 0 ;; esac
+  top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || return 1
+  case "$top" in "$parent"/ts-*|"$parent"/tt-*) echo "$top" ;; *) return 1 ;; esac
+}
+set -f
+base=$cwd; hit=""
+while IFS= read -r seg; do
+  # shellcheck disable=SC2046,SC2086  # word splitting is the tokenizer; globbing is off
+  set -- $(printf '%s' "$seg" | tr -d "\"'()")
+  [ "$#" -gt 0 ] || continue
+  if [ "$1" = cd ] && [ -n "${2:-}" ]; then
+    case "$2" in /*|\$*) base=$2 ;; *) base="$base/$2" ;; esac
+    continue
+  fi
+  [ "$1" = git ] || continue
+  shift; dir=$base
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -C) case "${2:-}" in /*|\$*) dir=$2 ;; *) dir="$dir/${2:-}" ;; esac; shift 2 ;;
+      -c) shift 2 ;;
+      -*) shift ;;
+      *) break ;;
+    esac
+  done
+  case "${1:-}" in
+    switch) [ "$#" -gt 1 ] || continue ;;
+    checkout)
+      shift; [ "$#" -gt 0 ] || continue
+      case " $* " in *" -b "*|*" -B "*|*" --orphan "*) ;; *" -- "*) continue ;; esac
+      [ "$1" = . ] && continue ;;
+    *) continue ;;
+  esac
+  top=$(task_wt "$dir") && { hit=$top; break; }
+done <<SEGS
+$(printf '%s' "$cmd" | tr ';&|' '\n')
+SEGS
+[ -n "$hit" ] || exit 0
+br=""; [ "$hit" = "?" ] || br=$(git -C "$hit" branch --show-current 2>/dev/null)
+msg="Refused: this command would change the branch checked out in a Kaizero Task worktree${br:+ (claim branch $br)}. The claim is that branch checked out there; moving it off hands the Task to a peer. Stay on ${br:-the claim branch}; to give the Task up, run zero.sh release."
+printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$msg"
+exit 0
+HOOK_EOF
+} | atomic_put "$BRANCH_GUARD_HOOK" "" +x
+
 # inline settings JSON merged over global config via --settings. git-dir/worktree paths have no
 # JSON metachars, so bare interpolation is safe. autoMode.environment (with "$defaults" so the
 # built-in classifier rules stay in effect) and permissions.additionalDirectories trust $WT_PARENT
@@ -1756,7 +1821,7 @@ HOOK_EOF
 # non-nested MR) — alongside $COORD_ROOT, the launch cwd, so a claimed worktree's edits don't stall
 # on a permission prompt in an unattended fleet session.
 # shellcheck disable=SC2016  # $defaults is a literal JSON string, not a shell expansion
-STOP_SETTINGS="$(printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]},"autoMode":{"environment":["$defaults","%s","%s"]},"permissions":{"additionalDirectories":["%s"]}}' "$STOP_HOOK" "$COORD_ROOT" "$WT_PARENT" "$WT_PARENT")"
+STOP_SETTINGS="$(printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s"}]}],"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]},"autoMode":{"environment":["$defaults","%s","%s"]},"permissions":{"additionalDirectories":["%s"]}}' "$BRANCH_GUARD_HOOK" "$STOP_HOOK" "$COORD_ROOT" "$WT_PARENT" "$WT_PARENT")"
 
 # test hook: with KAIZERO_TEST_EMIT set, init has now written its generated scripts
 # (compact-exit-hook.sh + zero.sh) — stop before launching

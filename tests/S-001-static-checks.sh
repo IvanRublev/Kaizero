@@ -37,7 +37,7 @@ check "S1 kaizero.sh clean" "$?" "0"
   echo '- [ ] G noop' > todo.md; git add -A; git commit -qm init
   KAIZERO_TEST_EMIT=1 bash "$SCRIPT" --local-merge todo.md >/dev/null )
 rc=0
-for f in compact-exit-hook.sh zero.sh terminator.sh; do
+for f in compact-exit-hook.sh branch-guard-hook.sh zero.sh terminator.sh; do
   if [ -f "$TS/.git/$f" ]; then
     "$SHELLCHECK" -e SC2016 "$TS/.git/$f" || rc=1
   else
@@ -120,7 +120,7 @@ check "S3a selftest catches the unfixed form" "$?" "1"
 ver="$("$B3" --version | head -1 | sed -n 's/.*version \([0-9.]*\).*/\1/p')"
 rc=0; files="$REAL_SCRIPT"
 TS="$TESTROOT/S-001-static-checks/repo"
-for f in compact-exit-hook.sh zero.sh terminator.sh; do
+for f in compact-exit-hook.sh branch-guard-hook.sh zero.sh terminator.sh; do
   if [ -f "$TS/.git/$f" ]; then
     files="$files $TS/.git/$f"
   else
