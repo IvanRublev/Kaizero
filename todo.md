@@ -112,5 +112,6 @@ and the ones caused by missing synchronization run concurrently again
 - [ ] BUG-079 `zero.sh todo-list` offers Tasks that live peers already hold, so sessions learn they are taken only from a refused `claim`, where the held state was available tasks/BUG-079.md
 - [ ] ISSUE-080 Agent works through a long Release Todo List in short pages that say where the next one starts, and looks up any Task's file by its id tasks/ISSUE-080.md
 - [ ] ISSUE-081 Launchers of one fleet run the Task file check and the resolved-list rebuild once per change, the others waiting for the result tasks/ISSUE-081.md
+- [ ] BUG-082 Launchers write shared executable helpers and coordination records in place, so a peer that runs or reads one while it is rewritten gets a truncated file (f.e. `.git/zero.sh: line 2193: syntax error: unexpected end of file`), where a whole-file replace was intended tasks/BUG-082.md
 - [?] TASK-091 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-092 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, 
