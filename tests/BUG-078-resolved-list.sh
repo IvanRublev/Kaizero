@@ -60,8 +60,9 @@ rm -f "$D/.git/"task-resolved-*
 tl live
 check "B78-2 warm equals live" "$(cmp -s "$TR/warm.out" "$TR/live.out" && echo same || echo DIFFERS)" "same"
 check "B78-2 live prints paths" "$(grep -c 'TASK-1 x  /' "$TR/live.out")" "1"
-check "B78-2 live prints the no-file line bare" "$(grep -c '^- \[ \] NOFILE-1 none$' "$TR/live.out")" "1"
-check "B78-2 live prints the ambiguous line bare" "$(grep -c '^- \[ \] DUP-1 two$' "$TR/live.out")" "1"
+"$B3" "$ZERO" todo-list TASK-12 > "$TR/live-last.out" 2>&1   # the last page holds the two unusable lines
+check "B78-2 live prints the no-file line bare" "$(grep -c '^- \[ \] NOFILE-1 none$' "$TR/live-last.out")" "1"
+check "B78-2 live prints the ambiguous line bare" "$(grep -c '^- \[ \] DUP-1 two$' "$TR/live-last.out")" "1"
 check "B78-2 live writes no cache" "$(ls "$D/.git/" | grep -c '^task-resolved-')" "0"
 rt c
 PS4='+@${FUNCNAME[0]:-main}@ ' "$B3" -x "$ZERO" todo-list 2> "$TR/trace.txt" > "$TR/trace.out" 4>/dev/null
