@@ -5399,7 +5399,8 @@ unchecked_todos() {
 # Every UNCHECKED (`- [ ]`) line whose id resolves to exactly one Task file (via
 # resolve_task_ids — reused, never reimplemented) gets that file's $COORD_ROOT-absolute path
 # appended. A checked or other-symbol line, or an unchecked id resolving to zero or multiple
-# files, prints unchanged — this only ever adds information, never a verdict.
+# files, prints unchanged — this only ever adds information, never a verdict. A line whose Task
+# a live peer holds (held_ids) also gets " ⚒️ held by a live peer" right behind its id token.
 # the Release Todo List's own tail on the coordination base — from the two lines before the first
 # unchecked box to the end, fence-aware — with no Task-file paths appended. todo_list annotates
 # this; unchecked_tail_ids reads it as it is, since the annotation it would otherwise pay a whole
@@ -5446,9 +5447,24 @@ todo_list() {
     done < <(resolved_lines "${ids[@]}" || printf '%s\n' "${ids[@]}" | resolve_task_ids)
   fi
 
+  # held tag: live fleet state, computed on every call, never cached (BUG 079). A failed scan
+  # leaves the list untagged — the tag is advice, claim stays the authority.
+  local held tag=$' \xe2\x9a\x92\xef\xb8\x8f held by a live peer' hid pre tok post link_re='^\[([^]]+)\]\([^)]+\)$'
+  if ! held=$(held_ids); then
+    echo "zero.sh todo-list: warning: held-peer scan failed, held Tasks are not tagged" >&2
+    held=""
+  fi
+  held=$'\n'"$held"$'\n'
+
   j=0
   while IFS= read -r line; do
     if [[ "$line" =~ ^[[:space:]]*-\ \[\ \] ]]; then
+      if [ "${#held}" -gt 2 ] && [[ "$line" =~ ^([[:space:]]*-\ \[\ \][[:space:]]*)([^[:space:]]+)(.*)$ ]]; then
+        pre=${BASH_REMATCH[1]}; tok=${BASH_REMATCH[2]}; post=${BASH_REMATCH[3]}
+        hid=$tok
+        [[ "$tok" =~ $link_re ]] && hid=${BASH_REMATCH[1]}
+        [[ "$held" == *$'\n'"$(sanitize_id "$hid")"$'\n'* ]] && line="$pre$tok$tag$post"
+      fi
       if [ -n "${ok_path[j]:-}" ]; then
         printf '%s  %s\n' "$line" "${ok_path[j]}"
       else
@@ -5615,7 +5631,8 @@ is_done() {
 # Task X's holder dying even when the total held COUNT stays identical (a different peer claims
 # something else in the same tick).
 held_ids() {
-  local path branch id pid st cur
+  local path branch id pid st cur wl
+  wl=$(git -C "$COORD_ROOT" worktree list --porcelain 2>/dev/null) || return 1
   while IFS=$'\t' read -r path branch; do
     case "$branch" in "$COORD_BASE-task-"*) id=${branch#"$COORD_BASE"-task-} ;; *) continue ;; esac
     [ -f "$path/.owner" ] || continue
@@ -5625,9 +5642,10 @@ held_ids() {
     cur=""
     if [ -f "$SESSION_DIR/$pid" ]; then { read -r _; read -r cur; } < "$SESSION_DIR/$pid" 2>/dev/null || cur=""; fi
     [ "$cur" = "$id" ] && printf '%s\n' "$id"
-  done < <(git -C "$COORD_ROOT" worktree list --porcelain | awk '
+  done < <(awk '
     /^worktree /            { p = substr($0, 10) }
-    /^branch refs\/heads\// { printf "%s\t%s\n", p, substr($0, 19) }')
+    /^branch refs\/heads\// { printf "%s\t%s\n", p, substr($0, 19) }' <<<"$wl")
+  return 0
 }
 
 # deterministic signature for "what would have to change before a retry could possibly claim
@@ -6467,6 +6485,7 @@ Keep these facts in mind:
    checkboxes, one per line, each carrying an id as the FIRST whitespace-delimited token after the
    checkbox:
        - [ ] SMTH-855 some Task Unlanded /repo/tasks/SMTH-855.md  ← UNCHECKED = still to do
+       - [ ] SMTH-856 ⚒️ held by a live peer some Task /repo/tasks/SMTH-856.md  ← held = not a candidate
        - [x] 7.a some Task already Landed         ← CHECKED   = Landed, skip it
        - [?] 9 some Task Landed, needs review     ← any other symbol = Landed, not yours to claim
    That first token is the task_id (e.g. SMTH-855, 7, 7.a, [BUG-5348](tasks/...)). An UNCHECKED line ending in a path
@@ -6474,7 +6493,14 @@ Keep these facts in mind:
    claiming that candidate; it is that Task's full body, not the one-line summary before it. An
    UNCHECKED line with no appended path has no resolved Task file: there is nothing to judge or
    implement for it — skip it, do not judge its independence or attempt to claim it; try the next
-   one.
+   one. A line tagged "⚒️ held by a live peer" right behind its id is held by a live peer:
+     - it is not a candidate — never call `claim` for it and never Read its file as a candidate;
+     - it still counts as an unchecked Task when judging dependencies, and you may Read its Task
+       file (the path stays on the line) when that helps you judge whether a candidate depends on it;
+     - a refused `claim` on an untagged candidate still means skip to the next candidate, because
+       two sessions can pick the same free Task in the same moment.
+   When every unchecked line is tagged, nothing is claimable: end the session as you would after
+   walking the whole list without claiming.
        non-zero exit → STOP IMMEDIATELY: print `@@ZERO_SH@@ todo-list`'s stderr verbatim as the
                         reason and end your turn without claiming anything.
 2. For each candidate task_id, in order:
@@ -6662,6 +6688,7 @@ Keep these facts in mind:
    checkboxes, one per line, each carrying an id as the FIRST whitespace-delimited token after the
    checkbox:
        - [ ] SMTH-855 some Task Unlanded /repo/tasks/SMTH-855.md  ← UNCHECKED = still to do
+       - [ ] SMTH-856 ⚒️ held by a live peer some Task /repo/tasks/SMTH-856.md  ← held = not a candidate
        - [x] 7.a some Task already Landed         ← CHECKED   = Landed, skip it
        - [↑] 3 some Task under review              ← already spoken for, not yours to claim
        - [⛔] 5 some Task declined                  ← already spoken for, not yours to claim
@@ -6671,7 +6698,14 @@ Keep these facts in mind:
    claiming that candidate; it is that Task's full body, not the one-line summary before it. An
    UNCHECKED line with no appended path has no resolved Task file: there is nothing to judge or
    implement for it — skip it, do not judge its independence or attempt to claim it; try the next
-   one.
+   one. A line tagged "⚒️ held by a live peer" right behind its id is held by a live peer:
+     - it is not a candidate — never call `claim` for it and never Read its file as a candidate;
+     - it still counts as an unchecked Task when judging dependencies, and you may Read its Task
+       file (the path stays on the line) when that helps you judge whether a candidate depends on it;
+     - a refused `claim` on an untagged candidate still means skip to the next candidate, because
+       two sessions can pick the same free Task in the same moment.
+   When every unchecked line is tagged, nothing is claimable: end the session as you would after
+   walking the whole list without claiming.
        non-zero exit → STOP IMMEDIATELY: print `@@ZERO_SH@@ todo-list`'s stderr verbatim as the
                         reason and end your turn without claiming anything.
 2. For each candidate task_id, in order:
