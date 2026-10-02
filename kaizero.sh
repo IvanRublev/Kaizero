@@ -138,8 +138,9 @@ version @@VERSION@@
                                    the relaunched session claims the next free Task.
 
     KAIZERO_PROGRESS_DELAY=seconds
-                                   How long `zero.sh validate-tasks` walks before its
-                                   progress bar appears, as a plain count of seconds.
+                                   How long `zero.sh validate-tasks` or `zero.sh resolve-tasks`
+                                   walks before its progress bar appears, as a plain count of
+                                   seconds.
                                    Default @@PROGRESS_DELAY_DEFAULT@@, which keeps a short
                                    walk from drawing a bar that would clear again inside a
                                    frame; 0 draws from the first id resolved.
@@ -882,6 +883,11 @@ while true; do
     # the whole tail, so unlike validate-ids above it never sets IDFAIL or breaks the loop.
     if ! TASKOUT=$("$ZERO_SH" validate-tasks 2>&1); then
         printf '\n❄ Task definition issue(s) found — affected candidate(s) will be skipped until fixed:\n%s\n' "$TASKOUT"
+    fi
+    # builds the list todo-list reads its Task file paths from; no verdict of its own, so it runs
+    # whatever validate-tasks found. Silent by contract — any byte it writes is shown as a finding.
+    if ! RESOLVEOUT=$("$ZERO_SH" resolve-tasks 2>&1) || [ -n "$RESOLVEOUT" ]; then
+        printf '\n❄ Resolved-list step reported:\n%s\n' "$RESOLVEOUT"
     fi
     # reads back what reviewers did on every open [↑] handoff before this pass judges the
     # Release Todo List — a no-op under MR_MODE=0 (no forge to ask) and a warning, never a
@@ -2356,6 +2362,9 @@ wait_for_reviews() {
         if ! TASKOUT=$("$ZERO_SH" validate-tasks 2>&1); then
           printf '\n❄ Task definition issue(s) found — affected candidate(s) will be skipped until fixed:\n%s\n' "$TASKOUT"
         fi
+        if ! RESOLVEOUT=$("$ZERO_SH" resolve-tasks 2>&1) || [ -n "$RESOLVEOUT" ]; then
+          printf '\n❄ Resolved-list step reported:\n%s\n' "$RESOLVEOUT"
+        fi
       else
         printf '\n❄ Task id validation failed\n%s\n' "$IDOUT" >&2
         IDFAIL=1
@@ -2478,6 +2487,9 @@ wait_for_dependency_clear() {
         # cleared this tick's status line, so no second clear is needed here.
         if ! TASKOUT=$("$ZERO_SH" validate-tasks 2>&1); then
           printf '\n❄ Task definition issue(s) found — affected candidate(s) will be skipped until fixed:\n%s\n' "$TASKOUT"
+        fi
+        if ! RESOLVEOUT=$("$ZERO_SH" resolve-tasks 2>&1) || [ -n "$RESOLVEOUT" ]; then
+          printf '\n❄ Resolved-list step reported:\n%s\n' "$RESOLVEOUT"
         fi
       else
         printf '\n❄ Task id validation failed\n%s\n' "$IDOUT" >&2
@@ -5427,10 +5439,12 @@ todo_list() {
 
   local ok_path=() j=0 cls p
   if [ "${#ids[@]}" -gt 0 ]; then
+    # the resolved list the loop's resolve-tasks step published, when it still matches; otherwise
+    # the live resolution this function always did, which writes nothing.
     while IFS=$'\t' read -r _ cls p; do
       [ "$cls" = ok ] && ok_path[j]="$p"
       j=$((j+1))
-    done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids)
+    done < <(resolved_lines "${ids[@]}" || printf '%s\n' "${ids[@]}" | resolve_task_ids)
   fi
 
   # held tag: live fleet state, computed on every call, never cached (BUG 079). A failed scan
@@ -6228,6 +6242,73 @@ prog_end() {
   printf '\r\033[K' >&4 || true
 }
 
+# resolved list (BUG 078): resolve_task_ids' answer for every unchecked id, built once per change by
+# the loop's resolve-tasks step and read by todo-list. Keyed like the task-definition cache on the
+# filesystem signature (sorted candidate paths plus the unchecked ids, both file-name facts), but with
+# no timestamp comparison: resolution depends on names only, so a content edit does not stale it.
+# Line 1 is the signature, then one resolve_task_ids line per non-empty id, in order.
+resolved_cache_file() {
+  local key
+  key=$(printf '%s\x1e%s\n' "$COORD_BASE" "$TODO_PATH" | cksum | awk '{print $1}')
+  printf '%s/task-resolved-%s' "$COORD_GITDIR" "$key"
+}
+
+# sets TS_CANDS (the candidate paths of the ids in "$@") and TS_SIG (their signature)
+tasks_signature() {
+  TS_CANDS=(); TS_SIG=''
+  local p
+  while IFS= read -r -d '' p; do TS_CANDS+=("$p"); done < <(printf '%s\n' "$@" | candidate_paths)
+  TS_SIG=$( { printf '%s\n' "$@"; printf '\x1e%s\n' "${#TS_CANDS[@]}"; printf '%s\n' "${TS_CANDS[@]+"${TS_CANDS[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || TS_SIG=''
+}
+
+# resolved_lines ID... — prints the cached resolution of the non-empty ids and exits 0, only while
+# the list's signature matches the files and ids as they are now and every line is for the id in
+# its place; any other state (missing, unreadable, corrupt, mismatching) prints nothing, exits 1.
+resolved_lines() {
+  local f ids=() id body hdr line lines=() j
+  for id in "$@"; do [ -n "$id" ] && ids+=("$id"); done
+  [ "${#ids[@]}" -gt 0 ] || return 1
+  f=$(resolved_cache_file); [ -f "$f" ] || return 1
+  body=$(cat "$f" 2>/dev/null) || return 1
+  tasks_signature "${ids[@]}"
+  hdr="${body%%$'\n'*}"
+  { [ -n "$TS_SIG" ] && [ "$hdr" = "$TS_SIG" ] && [ "$body" != "$hdr" ]; } || return 1
+  while IFS= read -r line; do lines+=("$line"); done <<<"${body#*$'\n'}"
+  [ "${#lines[@]}" = "${#ids[@]}" ] || return 1
+  for (( j = 0; j < ${#ids[@]}; j++ )); do
+    [ "${lines[j]%%$'\t'*}" = "${ids[j]}" ] || return 1
+  done
+  printf '%s\n' "${lines[@]}"
+}
+
+# resolve-tasks: the loop step that builds the resolved list. No verdict (an id resolving to none or
+# several is recorded, not reported), independent of validate-tasks, and silent on both streams —
+# the callers capture them and read any byte as a finding. A git directory it cannot write costs the
+# cache only. A hit draws nothing; a rebuild draws validate-tasks' display under its own label.
+resolve_tasks() {
+  local ids=() id started cachefile tmp line out=()
+  while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
+  [ "${#ids[@]}" -gt 0 ] || return 0
+  cachefile=$(resolved_cache_file)
+  started=$SECONDS
+  tasks_signature "${ids[@]}"
+  [ -n "$TS_SIG" ] || return 0
+  resolved_lines "${ids[@]}" >/dev/null 2>&1 && return 0
+  PROG_LABEL='Resolving task files'
+  prog_start "${#ids[@]}" "$started"
+  while IFS= read -r line; do out+=("$line"); prog_tick; done \
+    < <(printf '%s\n' "${ids[@]}" | resolve_task_ids -- "${TS_CANDS[@]+"${TS_CANDS[@]}"}")
+  prog_end
+  # published whole by rename, so a launcher starting at the same moment never reads a half file
+  tmp="$cachefile.tmp.$$"
+  if { printf '%s\n' "$TS_SIG"; printf '%s\n' "${out[@]}"; } 2>/dev/null > "$tmp"; then
+    mv -f "$tmp" "$cachefile" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  else
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # task-definition cache (ISSUE 077): the walk below is the largest pre-launch cost and repeats
 # identically between sessions. It is keyed on a filesystem signature, never on a commit — Task
 # files may be gitignored or carry uncommitted edits, and both must keep invalidating it, which is
@@ -6340,13 +6421,14 @@ case "${1:-}" in
   no-claim-signature)     no_claim_signature ;;
   validate-ids)           validate_ids ;;
   validate-tasks)         validate_tasks ;;
+  resolve-tasks)          resolve_tasks ;;
   todo-list)              todo_list ;;
   unchecked-todos)        unchecked_todos ;;
   target-branch)          target_branch "$2" "$3" ;;
   target-branches-for-id) target_branches_for_id "$2" ;;
   box-symbol-on-base)     box_symbol_on_base "$2" ;;
   sync-mrs)               sync_mrs ;;
-  *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | todo-list | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
+  *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | resolve-tasks | todo-list | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
 esac
 ZERO_EOF
     } > "$gitdir/zero.sh"
