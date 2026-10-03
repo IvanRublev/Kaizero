@@ -107,5 +107,13 @@
 - [x] ISSUE-075 `kz-tmux.sh` runs several `kaizero` instances at once, each in its own tiled tmux pane, alongside `kaizero.sh` tasks/ISSUE-075.md
 - [x] ISSUE-076 `kz-tmux.sh` launches instances in throttled batches instead of one big burst tasks/ISSUE-076.md
 - [x] ISSUE-077 Pre-launch validation reuses its last verdict while nothing changed, and shows progress when it must walk tasks/ISSUE-077.md
-- [?] TASK-080 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
-- [?] TASK-081 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, and the ones caused by missing synchronization run concurrently again
+and the ones caused by missing synchronization run concurrently again
+- [x] BUG-078 Every `zero.sh todo-list` call re-resolves all unchecked ids to Task files, so each session waits 10 to 114 seconds before it can claim anything, though the answer changes rarely tasks/BUG-078.md
+- [x] BUG-079 `zero.sh todo-list` offers Tasks that live peers already hold, so sessions learn they are taken only from a refused `claim`, where the held state was available tasks/BUG-079.md
+- [x] ISSUE-080 Agent works through a long Release Todo List in short pages that say where the next one starts, and looks up any Task's file by its id tasks/ISSUE-080.md
+- [x] ISSUE-081 Launchers of one fleet run the Task file check and the resolved-list rebuild once per change, the others waiting for the result tasks/ISSUE-081.md
+- [x] BUG-082 Launchers write shared executable helpers and coordination records in place, so a peer that runs or reads one while it is rewritten gets a truncated file (f.e. `.git/zero.sh: line 2193: syntax error: unexpected end of file`), where a whole-file replace was intended tasks/BUG-082.md
+- [x] BUG-083 A zeroing session can switch its Task worktree off the claim branch with one `git checkout`, so a peer rescues the live Task, where the session prompt's ban on switching branches was intended to hold tasks/BUG-083.md
+- [x] ISSUE-084 Operator who has landed three Tasks is invited to a feedback call or survey on the exit report, and `kaizero --no-interviews` hides the invitation for good tasks/ISSUE-084.md
+- [?] TASK-091 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
+- [?] TASK-092 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, 

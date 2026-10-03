@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # scripts kaizero.sh emits into its git dir; keep in sync when a new one is added.
-SCRIPTS=(compact-exit-hook.sh zero.sh terminator.sh)
+SCRIPTS=(compact-exit-hook.sh branch-guard-hook.sh zero.sh terminator.sh)
 
 here="$(cd "$(dirname "$0")" && pwd)"
 src="$(cd "$here/.." && pwd)/kaizero.sh"

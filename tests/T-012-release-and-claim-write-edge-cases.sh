@@ -48,8 +48,9 @@ check "T25 usage optional" "$(cat "$T25/usage.out")" "1"
 
 # T26 — a claim whose `.owner` cannot be written leaves no claim behind
 # A first claim succeeds normally; its `.owner` is then hand-set to a dead owner (pid 999999,
-# E-001's fabrication pattern) and chmod 000'd. The next claim takes the steal path, gets as far
-# as re-acquiring the worktree, then fails at the write claim_owner attempts — it must undo and
+# E-001's fabrication pattern) and its worktree dir chmod 555'd (claim_owner writes via temp +
+# rename, so only a dir the rename can't enter blocks it). The next claim takes the steal path,
+# gets as far as re-acquiring the worktree, then fails at the write claim_owner attempts — it must undo and
 # refuse rather than believe it holds the task.
 T26="$TESTROOT/T26"; mkdir -p "$T26/code" "$T26/plan" "$T26/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$T26/bin/claude"; chmod +x "$T26/bin/claude"
@@ -73,7 +74,7 @@ wt1=$(cat "$T26/wt1.out")
 own1=$(git -C "$T26/plan" worktree list --porcelain | awk -v b="refs/heads/main-task-WID" '/^worktree /{p=substr($0,10)} /^branch /{if(substr($0,8)==b){print p;exit}}')
 
 printf '%s\n%s\n%s\n%s\n%s\n' 999999 fake "$(( $(date +%s) - 100 ))" A "$wt1" > "$own1/.owner"
-chmod 000 "$own1/.owner"
+chmod 555 "$own1"
 
 cat > "$T26/drive2.sh" <<DRIVE2
 set -uo pipefail
@@ -86,7 +87,7 @@ echo "\$rc" > "$T26/exit2.out"
 [ -z "\$out" ] && echo yes > "$T26/nopath.out" || echo "NO (\$out)" > "$T26/nopath.out"
 DRIVE2
 bash "$T26/drive2.sh"
-chmod 600 "$own1/.owner" 2>/dev/null || true
+chmod 755 "$own1" 2>/dev/null || true
 check "T26 exit" "$(cat "$T26/exit2.out")" "1"
 # want yes — a failed write prints no path
 check "T26 no path" "$(cat "$T26/nopath.out")" "yes"

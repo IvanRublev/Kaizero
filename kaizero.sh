@@ -7,8 +7,11 @@
 # Run -h for usage.
 set -euo pipefail
 
-VERSION="0.1.7"
+VERSION="0.1.8"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
+# per-machine state (lifetime landed-Task count, hidden-invitation choice): outside any repository
+# and outside the install location, so a reinstall or upgrade leaves it alone. Also baked into zero.sh.
+kz_state_dir() { printf '%s/kaizero' "${XDG_STATE_HOME:-$HOME/.local/state}"; }
 
 # lowest released version of each forge CLI known to carry every flag/field assert_forge_flags
 # and mr_list/mr_create depend on — named as the fix in that check's failure messages. gh:
@@ -138,8 +141,9 @@ version @@VERSION@@
                                    the relaunched session claims the next free Task.
 
     KAIZERO_PROGRESS_DELAY=seconds
-                                   How long `zero.sh validate-tasks` walks before its
-                                   progress bar appears, as a plain count of seconds.
+                                   How long `zero.sh validate-tasks` or `zero.sh resolve-tasks`
+                                   walks before its progress bar appears, as a plain count of
+                                   seconds.
                                    Default @@PROGRESS_DELAY_DEFAULT@@, which keeps a short
                                    walk from drawing a bar that would clear again inside a
                                    frame; 0 draws from the first id resolved.
@@ -883,6 +887,11 @@ while true; do
     if ! TASKOUT=$("$ZERO_SH" validate-tasks 2>&1); then
         printf '\n❄ Task definition issue(s) found — affected candidate(s) will be skipped until fixed:\n%s\n' "$TASKOUT"
     fi
+    # builds the list todo-list reads its Task file paths from; no verdict of its own, so it runs
+    # whatever validate-tasks found. Silent by contract — any byte it writes is shown as a finding.
+    if ! RESOLVEOUT=$("$ZERO_SH" resolve-tasks 2>&1) || [ -n "$RESOLVEOUT" ]; then
+        printf '\n❄ Resolved-list step reported:\n%s\n' "$RESOLVEOUT"
+    fi
     # reads back what reviewers did on every open [↑] handoff before this pass judges the
     # Release Todo List — a no-op under MR_MODE=0 (no forge to ask) and a warning, never a
     # break, on forge trouble: the loop's own shape must never depend on the forge answering.
@@ -941,10 +950,10 @@ while true; do
     cd "$TARGET_ROOT"
     # cleared BEFORE the launch, never after the exit: a value left by the previous iteration's
     # kill would otherwise be read as this one's cause.
-    : > "$EXIT_REASON_FILE"
+    atomic_put "$EXIT_REASON_FILE" </dev/null
     # Cleared before THIS launch, never after — a marker left by a prior (already killed)
     # launch must never be read as this launch's own first turn already being safe to end.
-    : > "$SAFE_TO_EXIT_FILE"
+    atomic_put "$SAFE_TO_EXIT_FILE" </dev/null
     # Pin the session id before launch, so its transcript path is known immediately —
     # every / in the absolute cwd becomes a literal -, under ~/.claude/projects, named
     # <session-id>.jsonl (Claude Code's own convention).
@@ -1127,6 +1136,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)          usage; exit 0 ;;
     --version)          echo "$VERSION"; exit 0 ;;
+    --no-interviews)    hide_interviews; exit $? ;;
     -t|--taskprompt)    [ $# -ge 2 ] || { echo "$PROG: $1 needs a value" >&2; exit 1; }; TASK_PROMPT="$2"; shift 2 ;;
     --taskprompt=*)     TASK_PROMPT="${1#*=}"; shift ;;
     --local-merge)       LOCAL_MERGE=1; shift ;;
@@ -1564,7 +1574,7 @@ INSTANCE_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)/instance"
 # register this instance (liveness marker), remove it on any exit, then GC dead runs' time-files.
 # EXIT fires on normal end, MAX_LOOPS break, and after the INT trap's `exit 0` — marker always cleared.
 # The target-side marker (empty path before it is set) is cleared the same way.
-mkdir -p "$INSTANCE_DIR"; printf '%s\n%s\n' "$$" "$(proc_start "$$")" > "$INSTANCE_DIR/$INSTANCE_ID"
+mkdir -p "$INSTANCE_DIR"; printf '%s\n%s\n' "$$" "$(proc_start "$$")" | atomic_put "$INSTANCE_DIR/$INSTANCE_ID" "$INSTANCE_DIR.$INSTANCE_ID"
 # BUG 057: the session record is per-instance state exactly like the instance marker above — every
 # exit path (Ctrl+C, TERM, MAX_LOOPS, IDFAIL) must leave none of this instance's identity behind.
 trap 'rm -f "$INSTANCE_DIR/$INSTANCE_ID" "$TARGET_INST_MARKER" "$SESSION_RECORD_FILE" "$SESSION_LOG_FILE" 2>/dev/null' EXIT
@@ -1591,7 +1601,9 @@ else
 fi
 
 STOP_HOOK="$GITDIR_ABS/compact-exit-hook.sh"
-# Stop hook: emitted as TWO heredocs into the same file. The first is UNQUOTED so
+BRANCH_GUARD_HOOK="$GITDIR_ABS/branch-guard-hook.sh"
+# Stop hook: emitted as TWO heredocs into one group, published whole by atomic_put (head and body
+# land together, with the executable bit). The first is UNQUOTED so
 # $CONTEXT_THRESHOLDS/$CONTEXT_THRESHOLD_DEFAULT interpolate; the second (unchanged, `>>`) stays
 # QUOTED — its body is full of live `$`. Four characters in CONTEXT_THRESHOLDS's VALUE cannot
 # survive the unquoted heredoc: `$` and a backtick would expand, a backslash before any of
@@ -1601,17 +1613,17 @@ STOP_HOOK="$GITDIR_ABS/compact-exit-hook.sh"
 # it that way. Baking the table into the emitted hook — unlike KAIZERO_TRANSCRIPTS, which the
 # body below still refuses to bake in — is safe because this value is per-SCRIPT-VERSION, not
 # per-instance: every peer running the SAME kaizero.sh writes the SAME bytes to this shared
-# path, so concurrent writers racing last-writer-wins is a no-op. Peers on DIFFERENT script
+# path, and each write is a whole-file rename, so a reader never sees a half-written hook. Peers on DIFFERENT script
 # versions overwrite each other's table on every launch — benign (whichever version wrote last is
 # what the next turn reads), and deliberately left unlocked.
-cat >"$STOP_HOOK" <<HOOK_HEAD
+{ cat <<HOOK_HEAD
 #!/usr/bin/env bash
 CONTEXT_THRESHOLDS='$CONTEXT_THRESHOLDS'
 CONTEXT_THRESHOLD_DEFAULT=$CONTEXT_THRESHOLD_DEFAULT
 TERMINATOR_SH='$GITDIR_ABS/terminator.sh'
-$(declare -f newest_relevant_line newest_record_uuid)
+$(declare -f newest_relevant_line newest_record_uuid atomic_put)
 HOOK_HEAD
-cat >>"$STOP_HOOK" <<'HOOK_EOF'
+cat <<'HOOK_EOF'
 # Stop hook. Fires post-turn (transcript already persisted). Couples to the transcript's
 # `message.usage` schema (the same shape read_tokens_total parses, see its own comment) — no
 # other hook, no state file. The context-rot guard below reads only the last 256 KiB of the
@@ -1654,7 +1666,7 @@ if [ -n "${KAIZERO_EXIT_REASON:-}" ]; then
 fi
 # BUG-071: content is the transcript's own newest record uuid, not an empty touch — turn_tree_state
 # compares this against the transcript's own newest uuid at judgment time, never mtime.
-[ -n "$mf" ] && { printf '%s' "$(newest_record_uuid "$tp")" > "$mf"; } 2>/dev/null
+[ -n "$mf" ] && { printf '%s' "$(newest_record_uuid "$tp")" | atomic_put "$mf"; } 2>/dev/null
 # process start-time (via ps): pins identity so a RECYCLED pid isn't mistaken for the same session.
 # Spelled identically in kaizero.sh's own copy and in the emitted zero.sh — see either's comment.
 # BUG 058k: the ONLY thing this hook may signal is the pid named by KAIZERO_SESSION_RECORD — the
@@ -1740,7 +1752,71 @@ fi
 term_owner 0
 exit 0
 HOOK_EOF
-chmod +x "$STOP_HOOK"
+} | atomic_put "$STOP_HOOK" "" +x
+
+# BUG 083: PreToolUse hook on the Bash tool, wired through the same --settings as the Stop hook (so
+# only Kaizero's sessions get it). Refuses a command that would change the branch checked out in a
+# Task worktree — the claim is that branch checked out there, so moving it off hands the Task to a
+# peer's rescue. A Task worktree is a sibling under $WT_PARENT named ts-* (Task) or tt-* (target).
+# Reads the call's JSON with sed, not jq: jq is a prerequisite of the MR modes only.
+{ cat <<HOOK_HEAD
+#!/usr/bin/env bash
+WT_PARENT='$WT_PARENT'
+HOOK_HEAD
+cat <<'HOOK_EOF'
+# BUG 083 branch guard. stdin: the PreToolUse JSON. Deny = JSON on stdout, exit 0; allow = silent.
+in=$(cat)
+cwd=$(printf '%s' "$in" | sed -nE 's/.*"cwd":"(([^"\\]|\\.)*)".*/\1/p')
+cmd=$(printf '%s' "$in" | sed -nE 's/.*"command":"(([^"\\]|\\.)*)".*/\1/p' \
+  | sed -e 's/\\n/;/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
+case "$cmd" in *git*) ;; *) exit 0 ;; esac
+parent=$(cd "$WT_PARENT" 2>/dev/null && pwd -P) || exit 0
+# prints the Task worktree's toplevel when $1 is inside one ($wt/$twt unresolved = the session's own)
+task_wt() {
+  local top
+  case "$1" in '$wt'|'${wt}'|'$twt'|'${twt}') echo "?"; return 0 ;; esac
+  top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || return 1
+  case "$top" in "$parent"/ts-*|"$parent"/tt-*) echo "$top" ;; *) return 1 ;; esac
+}
+set -f
+base=$cwd; hit=""
+while IFS= read -r seg; do
+  # shellcheck disable=SC2046,SC2086  # word splitting is the tokenizer; globbing is off
+  set -- $(printf '%s' "$seg" | tr -d "\"'()")
+  [ "$#" -gt 0 ] || continue
+  if [ "$1" = cd ] && [ -n "${2:-}" ]; then
+    case "$2" in /*|\$*) base=$2 ;; *) base="$base/$2" ;; esac
+    continue
+  fi
+  [ "$1" = git ] || continue
+  shift; dir=$base
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -C) case "${2:-}" in /*|\$*) dir=$2 ;; *) dir="$dir/${2:-}" ;; esac; shift 2 ;;
+      -c) shift 2 ;;
+      -*) shift ;;
+      *) break ;;
+    esac
+  done
+  case "${1:-}" in
+    switch) [ "$#" -gt 1 ] || continue ;;
+    checkout)
+      shift; [ "$#" -gt 0 ] || continue
+      case " $* " in *" -b "*|*" -B "*|*" --orphan "*) ;; *" -- "*) continue ;; esac
+      [ "$1" = . ] && continue ;;
+    *) continue ;;
+  esac
+  top=$(task_wt "$dir") && { hit=$top; break; }
+done <<SEGS
+$(printf '%s' "$cmd" | tr ';&|' '\n')
+SEGS
+[ -n "$hit" ] || exit 0
+br=""; [ "$hit" = "?" ] || br=$(git -C "$hit" branch --show-current 2>/dev/null)
+msg="Refused: this command would change the branch checked out in a Kaizero Task worktree${br:+ (claim branch $br)}. The claim is that branch checked out there; moving it off hands the Task to a peer. Stay on ${br:-the claim branch}; to give the Task up, run zero.sh release."
+printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$msg"
+exit 0
+HOOK_EOF
+} | atomic_put "$BRANCH_GUARD_HOOK" "" +x
 
 # inline settings JSON merged over global config via --settings. git-dir/worktree paths have no
 # JSON metachars, so bare interpolation is safe. autoMode.environment (with "$defaults" so the
@@ -1749,7 +1825,7 @@ chmod +x "$STOP_HOOK"
 # non-nested MR) — alongside $COORD_ROOT, the launch cwd, so a claimed worktree's edits don't stall
 # on a permission prompt in an unattended fleet session.
 # shellcheck disable=SC2016  # $defaults is a literal JSON string, not a shell expansion
-STOP_SETTINGS="$(printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]},"autoMode":{"environment":["$defaults","%s","%s"]},"permissions":{"additionalDirectories":["%s"]}}' "$STOP_HOOK" "$COORD_ROOT" "$WT_PARENT" "$WT_PARENT")"
+STOP_SETTINGS="$(printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s"}]}],"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]},"autoMode":{"environment":["$defaults","%s","%s"]},"permissions":{"additionalDirectories":["%s"]}}' "$BRANCH_GUARD_HOOK" "$STOP_HOOK" "$COORD_ROOT" "$WT_PARENT" "$WT_PARENT")"
 
 # test hook: with KAIZERO_TEST_EMIT set, init has now written its generated scripts
 # (compact-exit-hook.sh + zero.sh) — stop before launching
@@ -2356,6 +2432,9 @@ wait_for_reviews() {
         if ! TASKOUT=$("$ZERO_SH" validate-tasks 2>&1); then
           printf '\n❄ Task definition issue(s) found — affected candidate(s) will be skipped until fixed:\n%s\n' "$TASKOUT"
         fi
+        if ! RESOLVEOUT=$("$ZERO_SH" resolve-tasks 2>&1) || [ -n "$RESOLVEOUT" ]; then
+          printf '\n❄ Resolved-list step reported:\n%s\n' "$RESOLVEOUT"
+        fi
       else
         printf '\n❄ Task id validation failed\n%s\n' "$IDOUT" >&2
         IDFAIL=1
@@ -2479,6 +2558,9 @@ wait_for_dependency_clear() {
         if ! TASKOUT=$("$ZERO_SH" validate-tasks 2>&1); then
           printf '\n❄ Task definition issue(s) found — affected candidate(s) will be skipped until fixed:\n%s\n' "$TASKOUT"
         fi
+        if ! RESOLVEOUT=$("$ZERO_SH" resolve-tasks 2>&1) || [ -n "$RESOLVEOUT" ]; then
+          printf '\n❄ Resolved-list step reported:\n%s\n' "$RESOLVEOUT"
+        fi
       else
         printf '\n❄ Task id validation failed\n%s\n' "$IDOUT" >&2
         IDFAIL=1
@@ -2552,6 +2634,48 @@ print_report() {
   box_bottom "$C_DIM"
 }
 
+# `--no-interviews`: record the hidden choice for good. Runs before any repository check.
+hide_interviews() {
+  local d; d="$(kz_state_dir)"
+  { mkdir -p "$d" && : > "$d/interviews-hidden"; } 2>/dev/null \
+    || { echo "$PROG: Cannot record the choice in $d" >&2; return 1; }
+  echo "ok."
+}
+
+# the feedback invitation, printed right before the fleet TOTAL panel once the machine has landed
+# three Tasks and the operator has not hidden it. Styled: indented, colored lines; plain: the same
+# lines, unindented and uncolored, in a box. Blank lines: one before, two after (the panel adds its own).
+print_interview_invite() {
+  local d n; d="$(kz_state_dir)" || return 0   # fail-open: no HOME, no invitation, report still prints
+  [ ! -e "$d/interviews-hidden" ] || return 0
+  n="$(read_counter "$d/landed-count")"; [ "$n" -ge 3 ] || return 0
+  local q="Is your Claude Code loop slower than it should be?"
+  local p1="I'm the Kaizero author. We can review your config and hooks together"
+  local p2="in a free 20-minute call."
+  local p3="We'll find what to change, and I'll learn what slows your down."
+  local l1="Let's talk, you can pick a time:" u1="https://go.ivanrublev.com/book-review-cli"
+  local l2="Or share the setup in 5 questions:" u2="https://go.ivanrublev.com/survey-cli"
+  local l3="Not for you? Hide this message:" cmd="$PROG --no-interviews"
+  printf '\n'
+  if [ "$COLOR_CAPABLE" = 1 ]; then
+    printf '  %s %s\n\n' "$(c "$C_BLUE" "$SNOW")" "$q"
+    printf '    %s\n    %s\n\n' "$(c "$C_DIM" "$p1")" "$(c "$C_DIM" "$p2")"
+    printf '    %s\n\n' "$(c "$C_DIM" "$p3")"
+    printf '    %s %s\n\n' "$(c "$C_DIM" "$l1")" "$(c "$C_WHITE" "$u1")"
+    printf '    %s %s\n\n' "$(c "$C_DIM" "$l2")" "$(c "$C_WHITE" "$u2")"
+    printf '    %s %s\n\n\n' "$(c "$C_DIM" "$l3")" "$(c "$C_CYAN" "$cmd")"
+  else
+    box_top ""
+    box_line "" "$q" "$q"; box_line "" "" ""
+    box_line "" "$p1" "$p1"; box_line "" "$p2" "$p2"; box_line "" "" ""
+    box_line "" "$p3" "$p3"; box_line "" "" ""
+    box_line "" "$l1 $u1" "$l1 $u1"; box_line "" "" ""
+    box_line "" "$l2 $u2" "$l2 $u2"; box_line "" "" ""
+    box_line "" "$l3 $cmd" "$l3 $cmd"
+    box_bottom ""; printf '\n\n'
+  fi
+}
+
 # fleet-wide TOTAL for this base, printed once on the exit path beneath this instance's report.
 # The sum is a GLOB, not a registry: every figure is already one file per instance in the git common
 # dir, so a shared aggregate would only be a second copy that can disagree with the first. Read
@@ -2589,6 +2713,7 @@ print_fleet_total() {
     set -- $t
     if [ "$#" -eq 5 ]; then any=1; ti=$((ti+$1)); to=$((to+$2)); tcc=$((tcc+$3)); tcr=$((tcr+$4)); tt=$((tt+$5)); fi
   done
+  print_interview_invite
   printf '\n'
   box_top "$C_GOLD"
   box_line "$C_GOLD" "$(c "$C_BOLD" "TOTAL ($n instance$plural)")" "TOTAL ($n instance$plural)"
@@ -2685,7 +2810,7 @@ session_record_write() {   # $1=pid $2=epoch
   local pid=$1 epoch=$2 st
   st="$(proc_start "$pid")"
   [ -n "$st" ] || return 1
-  printf '%s\n%s\n%s\n' "$pid" "$st" "$epoch" > "$SESSION_RECORD_FILE"
+  printf '%s\n%s\n%s\n' "$pid" "$st" "$epoch" | atomic_put "$SESSION_RECORD_FILE"
 }
 session_record_clear() { rm -f "$SESSION_RECORD_FILE" 2>/dev/null || true; }
 # TASK-065: print every line zero.sh appended to SESSION_LOG_FILE since the last call, in the
@@ -2731,7 +2856,7 @@ cleanup_orphan_time_files() {
       case "$f" in *.lock|*.tmp) continue;; esac           # sidecars swept with their base file below
       id="${f##*/"$pre"-"$slug"-}"
       [ -f "$INSTANCE_DIR/$id" ] && continue                # id still has a (live) marker → keep
-      rm -f "$f" "$f.lock" "$f.tmp"
+      rm -f "$f" "$f.lock" "$f.tmp" "$f".*.tmp
     done
   done
   for f in "$gc/transcripts-$slug-"*; do                  # same rule for the token-accounting lists
@@ -2778,7 +2903,7 @@ register_on_target() {
       exit 1
     fi
   done
-  { printf '%s\n%s\n%s\n%s\n' "$$" "$(proc_start "$$")" "$mine" "$MR_MODE" > "$dir/$INSTANCE_ID"; } 2>/dev/null \
+  { printf '%s\n%s\n%s\n%s\n' "$$" "$(proc_start "$$")" "$mine" "$MR_MODE" | atomic_put "$dir/$INSTANCE_ID" "$dir.$INSTANCE_ID"; } 2>/dev/null \
     || degraded=1
   [ "$locked" = 1 ] && exec 5>&-
   # reported once, however many of the steps above failed (directory, lock, marker)
@@ -2841,6 +2966,26 @@ register_target() {
   exec 6>&-
 }
 
+# BUG 082: replace a file other processes execute or read as a whole — stdin goes to a complete
+# temp file (final permissions applied) that one `mv -f` then renames onto $1, so a reader sees the
+# old or the new file, never a prefix or an empty one. $2 = temp-name stem (default $1): the temp
+# is "$2.<pid>.tmp", which the common-dir cleanup skips and the session/instance/hooks listings
+# never see; a stem left by a dead writer is removed first. $3 = chmod mode. A failed write leaves
+# $1 untouched and no temp behind. Emitted into zero.sh, terminator.sh and the Stop hook with
+# `declare -f`, so every writer shares this one body.
+atomic_put() {
+  local final=$1 stem=${2:-$1} mode=${3:-} s p tmp
+  tmp="$stem.${BASHPID:-$$}.tmp"
+  for s in "$stem".*.tmp; do
+    [ -e "$s" ] || continue
+    p=${s#"$stem".}; p=${p%.tmp}
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null || rm -f "$s"
+  done
+  { cat > "$tmp" && { [ -z "$mode" ] || chmod "$mode" "$tmp"; } && mv -f "$tmp" "$final"; } \
+    || { rm -f "$tmp" 2>/dev/null; return 1; }
+}
+
 # TASK-059e: write <repo>/.git/hooks/prepare-commit-msg once per repo, given that repo's root as
 # $1 — git worktrees share one common git dir's hooks/, so one install per repo covers every
 # worktree kaizero.sh creates there. Appends the Kaizero co-author trailer only to a commit made
@@ -2853,7 +2998,7 @@ register_target() {
 write_prepare_commit_msg_hook() {
     local gitdir hook; gitdir="$(cd "$1" && cd "$(git rev-parse --git-dir)" && pwd)"
     hook="$gitdir/hooks/prepare-commit-msg"
-    cat >"$hook" <<'HOOK_EOF'
+    cat <<'HOOK_EOF' | atomic_put "$hook" "" +x
 #!/usr/bin/env bash
 [ -n "${KAIZERO_INSTANCE:-}" ] || exit 0
 [ -n "${KAIZERO_NO_CO_AUTHORSHIP:-}" ] && exit 0
@@ -2861,7 +3006,6 @@ msg_file="$1"
 grep -qF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg_file" 2>/dev/null && exit 0
 printf '\n\nCo-authored-by: Kaizero <noreply@kaizero.sh>\n' >> "$msg_file"
 HOOK_EOF
-    chmod +x "$hook"
 }
 
 # BUG 058k: write .git/terminator.sh, the ONE shutdown sequence on_term/on_hup/arm_watchdog (below,
@@ -2884,6 +3028,7 @@ write_terminator_sh() {
         printf '#!/usr/bin/env bash\n'
         printf 'set -u\n'   # no -e: every step below already checks its own failure explicitly
         printf 'WATCHDOG_GRACE=%s\n' "$WATCHDOG_GRACE"
+        declare -f atomic_put
         cat <<'TERMINATOR_EOF'
 proc_start() { ps -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1;print}'; }
 # $1=record path $2=want_epoch. Same three-way (pid/proc_start/epoch) check every other copy in
@@ -2957,7 +3102,7 @@ fi
     [ -n "$EXIT_REASON_FILE" ] || return 0
     { if [ -n "$CODE" ]; then printf '%s\n' "$CODE"; else printf '\n'; fi
       local l; for l in "${STATUS_LINES[@]:-}"; do [ -n "$l" ] && printf '%s\n' "$l"; done
-    } > "$EXIT_REASON_FILE" 2>/dev/null || true
+    } | atomic_put "$EXIT_REASON_FILE" 2>/dev/null || true
   }
   append_status() { STATUS_LINES+=("$1"); write_reason_file; }
   # EXIT trap first, before any other step: guarantees SOME final write records this sequence
@@ -3036,8 +3181,7 @@ fi
 } &
 exit 0
 TERMINATOR_EOF
-    } > "$gitdir/terminator.sh"
-    chmod +x "$gitdir/terminator.sh"
+    } | atomic_put "$gitdir/terminator.sh" "" +x
 }
 
 # write .git/zero.sh (the per-Task acquire/release/merge helper the zero prompt calls) with
@@ -3081,6 +3225,7 @@ write_zero_sh() {
         printf '# shellcheck disable=SC2034\nMR_MODE=%q\n' "$MR_MODE"
         printf '# shellcheck disable=SC2034\nFORGE=%q\n' "${FORGE:-}"
         printf '# shellcheck disable=SC2034\nORIGIN_URL=%q\n' "${ORIGIN_URL:-}"
+        declare -f atomic_put kz_state_dir
         cat <<'ZERO_EOF'
 # neither the caller's cwd nor an inherited git environment variable may pick the repository a
 # git call below answers for — GIT_DIR/GIT_COMMON_DIR outrank both cwd and -C — so they are
@@ -3145,6 +3290,12 @@ add_todos_done() {
   local inst=${1:-}
   [ -n "$inst" ] || inst=shared
   add_counter 1 "$(todos_done_file "$inst")"
+  add_machine_landed
+}
+# +1 to the per-machine lifetime landed count (the feedback invitation reads it). Fail-open: an
+# unwritable state location costs the count, never the landing — silent, in a subshell, status ignored.
+add_machine_landed() {
+  ( d="$(kz_state_dir)" && mkdir -p "$d" && add_counter 1 "$d/landed-count" ) >/dev/null 2>&1 || true
 }
 # Path of THIS process's own safe-to-exit marker — keyed by $INSTANCE_ID, the CURRENT
 # instance, never the (possibly different, possibly dead) owner add_todos_time/add_todos_done
@@ -3153,7 +3304,7 @@ add_todos_done() {
 safe_to_exit_file() { printf '%s/safe-to-exit-%s-%s' "$COORD_GITDIR" "${COORD_BASE//\//-}" "$INSTANCE_ID"; }
 # touch it: called from every path here that reaches a definitive "OK to end this session"
 # outcome for the CURRENT instance — a landed task or a confirmed-empty board.
-mark_safe_to_exit() { printf '1\n' > "$(safe_to_exit_file)"; }
+mark_safe_to_exit() { printf '1\n' | atomic_put "$(safe_to_exit_file)"; }
 # add $1 (positive int) to counter file $2, under a per-file lock.
 add_counter() {
   local add=$1 f=$2 cur=0
@@ -3543,7 +3694,7 @@ session_current() {                              # $1=pid → its current Task i
   { read -r _; read -r cur; } < "$f" 2>/dev/null || true
   printf '%s' "${cur:-none}"
 }
-set_current() { mkdir -p "$SESSION_DIR"; printf '%s\n%s\n' "$OWN_START" "$1" > "$(marker "$OWNER_PID")"; }
+set_current() { mkdir -p "$SESSION_DIR"; printf '%s\n%s\n' "$OWN_START" "$1" | atomic_put "$(marker "$OWNER_PID")" "$COORD_GITDIR/session-marker.$OWNER_PID"; }
 # GC: unlink markers whose session is gone or whose pid was recycled. Cheap — piggybacks acquire's
 # scan. Others reap the dead; a dead session can't clean its own file.
 reap_dead_sessions() {
@@ -3583,7 +3734,7 @@ wt_for_branch_in() {
 # A claim whose .owner cannot be written is not a claim: the caller must check this
 # return, undo whatever it created, and print no path — otherwise the exclusivity record every
 # other reader trusts is silently absent while this session still believes it holds the task.
-claim_owner() { printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$OWNER_PID" "$OWN_START" "$(date +%s)" "$INSTANCE_ID" "$2" "${3:-}" > "$1/.owner"; }
+claim_owner() { printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$OWNER_PID" "$OWN_START" "$(date +%s)" "$INSTANCE_ID" "$2" "${3:-}" | atomic_put "$1/.owner" "$1.owner"; }
 setup_exclude() {                                # keep the .owner file out of the agent's `git add -A`
   local ex; ex="$(git -C "$1" rev-parse --git-path info/exclude)"; mkdir -p "$(dirname "$ex")"
   grep -qxF '/.owner' "$ex" 2>/dev/null || echo '/.owner' >> "$ex"
@@ -4181,7 +4332,7 @@ inflight_file_for() {
 
 # write/clear the crash marker around each landing `git merge` — pid, start-time, the root that
 # merge touches — so a MERGE_HEAD a crash left behind can be told from a human's own merge.
-mark_inflight()  { INFLIGHT_FILE=$(inflight_file_for "$1"); printf '%s\n%s\n%s\n' "$$" "$(proc_start "$$")" "$1" > "$INFLIGHT_FILE"; }
+mark_inflight()  { INFLIGHT_FILE=$(inflight_file_for "$1"); printf '%s\n%s\n%s\n' "$$" "$(proc_start "$$")" "$1" | atomic_put "$INFLIGHT_FILE"; }
 clear_inflight() { [ -n "${INFLIGHT_FILE:-}" ] && rm -f "$INFLIGHT_FILE"; }
 # true iff root $1's own marker file names it and that entry's pid is no longer that same
 # process — i.e. THIS fleet's own wreck, safe to abort. A marker for a different root, or a live
@@ -5288,7 +5439,7 @@ credit_inflight_time() {
         fi
         # credit to the OWNER instance (line4), not whoever runs the sweep; keep line4 on the anchor
         # advance; line5 (the target worktree) and line6 (the fork point) are carried through untouched.
-        [ -n "$m" ] && { add_todos_time "$((m - owner_acq))" "${owner_inst:-}"; printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$owner_pid" "$owner_start" "$m" "${owner_inst:-}" "${owner_twt:-}" "${owner_fork:-}" > "$wt/.owner"; } ;;
+        [ -n "$m" ] && { add_todos_time "$((m - owner_acq))" "${owner_inst:-}"; printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$owner_pid" "$owner_start" "$m" "${owner_inst:-}" "${owner_twt:-}" "${owner_fork:-}" | atomic_put "$wt/.owner" "$wt.owner"; } ;;
       esac
     fi
     exec 7>&-
@@ -5387,7 +5538,8 @@ unchecked_todos() {
 # Every UNCHECKED (`- [ ]`) line whose id resolves to exactly one Task file (via
 # resolve_task_ids — reused, never reimplemented) gets that file's $COORD_ROOT-absolute path
 # appended. A checked or other-symbol line, or an unchecked id resolving to zero or multiple
-# files, prints unchanged — this only ever adds information, never a verdict.
+# files, prints unchanged — this only ever adds information, never a verdict. A line whose Task
+# a live peer holds (held_ids) also gets " ⚒️ held by a live peer" right behind its id token.
 # the Release Todo List's own tail on the coordination base — from the two lines before the first
 # unchecked box to the end, fence-aware — with no Task-file paths appended. todo_list annotates
 # this; unchecked_tail_ids reads it as it is, since the annotation it would otherwise pay a whole
@@ -5407,44 +5559,162 @@ todo_tail() {
     }'
 }
 
-todo_list() {
-  local raw
-  raw=$(todo_tail)
-  [ -n "$raw" ] || return 0
-
-  local ids=() id
-  while IFS= read -r id; do ids+=("$id"); done < <(printf '%s\n' "$raw" | awk '
+# todo_scan: every checkbox line of the Release Todo List on the coordination base, fence-aware,
+# as typed records: `U<id>\t<line>` per unchecked line, `L<id>` per Landed (any non-`[ ]`) line,
+# `C<line>` per leading context line (up to two before the first unchecked box), `P<id>\t<n>` per
+# checkbox line = how many unchecked lines precede the position just after it.
+todo_scan() {
+  git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" | awk '
     function unwraplink(s) {
       if (s ~ /^\[[^]]+\]\([^)]+\)$/) { sub(/^\[/, "", s); sub(/\]\(.*$/, "", s) }
       return s
     }
-    /^[ \t]*- \[ \]/ {
-      line = $0; sub(/^[ \t]*- \[ \][ \t]*/, "", line)
-      n = split(line, a, /[ \t]+/)
-      print (n > 0 ? unwraplink(a[1]) : "")
-    }')
+    /^[ \t]*```/ { fence = !fence; next }
+    fence        { next }
+    /^[ \t]*- \[[^]]+\]/ {
+      t = $0; sub(/^[ \t]*- \[[^]]+\][ \t]*/, "", t)
+      split(t, a, /[ \t]+/); id = unwraplink(a[1])
+      all[++n] = $0
+      if ($0 ~ /^[ \t]*- \[ \]/) {
+        if (!cut) cut = n
+        printf "U%s\t%s\n", id, $0; u++
+        printf "P%s\t%d\n", id, u
+      } else {
+        if (id != "") printf "L%s\n", id
+        printf "P%s\t%d\n", id, u
+      }
+    }
+    END {
+      if (!cut) exit 0
+      start = cut - 2; if (start < 1) start = 1
+      for (i = start; i < cut; i++) print "C" all[i]
+    }'
+}
 
-  local ok_path=() j=0 cls p
-  if [ "${#ids[@]}" -gt 0 ]; then
-    while IFS=$'\t' read -r _ cls p; do
-      [ "$cls" = ok ] && ok_path[j]="$p"
-      j=$((j+1))
-    done < <(printf '%s\n' "${ids[@]}" | resolve_task_ids)
+# todo_resolve_from IDX COUNT — fills todo_list's rset/rcls/rpath for the not yet resolved unchecked
+# ids IDX..IDX+COUNT-1 with one live resolve_task_ids call (uses todo_list's locals, dynamic scope).
+todo_resolve_from() {
+  local k i end=$(( $1 + $2 )) bids=() bidx=() cls p _id
+  [ "$end" -gt "$nu" ] && end=$nu
+  for (( k = $1; k < end; k++ )); do
+    [ -n "${rset[k]:-}" ] && continue
+    if [ -z "${uids[k]}" ]; then rset[k]=1; rcls[k]=missing; continue; fi
+    bids+=("${uids[k]}"); bidx+=("$k")
+  done
+  [ "${#bids[@]}" -gt 0 ] || return 0
+  k=0
+  while IFS=$'\t' read -r _id cls p; do
+    i=${bidx[k]}; rset[i]=1; rcls[i]=$cls; rpath[i]=$p; k=$((k+1))
+  done < <(printf '%s\n' "${bids[@]}" | resolve_task_ids)
+}
+
+# todo-list [ID]: one page of the Release Todo List's unchecked Tasks (ISSUE 080). The first page
+# (no ID) is the Landed line, the leading context lines, every held Task and the first three free
+# Tasks; `todo-list ID` is the held Tasks and the next three free Tasks after position ID, whatever
+# state ID is in. A free Task is unchecked, held by no live peer (held_ids) and resolves to exactly
+# one Task file; an unchecked Task without a usable file is printed bare, uncounted, within the
+# page's span. The last line names the id to continue after, or `none`. Task file paths come from
+# the resolved list (BUG 078) when it is current, else from live resolution only as far as the
+# page reaches. A held line carries " ⚒️ held by a live peer" behind its id token (BUG 079).
+todo_list() {
+  local cursor="${1-}" rec rest landed=() ctx=() uids=() ulines=() pids=() pstart=() scan
+  scan=$(todo_scan) || return $?
+  while IFS= read -r rec; do
+    rest=${rec:1}
+    case "${rec:0:1}" in
+      U) uids+=("${rest%%$'\t'*}"); ulines+=("${rest#*$'\t'}") ;;
+      L) landed+=("$rest") ;;
+      C) ctx+=("$rest") ;;
+      P) pids+=("${rest%%$'\t'*}"); pstart+=("${rest#*$'\t'}") ;;
+    esac
+  done <<<"$scan"
+  local nu=${#ulines[@]}
+  [ "$nu" -gt 0 ] || return 0
+
+  local start=0 k
+  if [ -n "$cursor" ]; then
+    start=-1
+    for (( k = 0; k < ${#pids[@]}; k++ )); do
+      [ "${pids[k]}" = "$cursor" ] && { start=${pstart[k]}; break; }
+    done
+    if [ "$start" -lt 0 ]; then
+      printf 'Task %s is not on the Todo List, start with: todo-list\n' "$cursor"
+      return 0
+    fi
   fi
 
-  j=0
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[[:space:]]*-\ \[\ \] ]]; then
-      if [ -n "${ok_path[j]:-}" ]; then
-        printf '%s  %s\n' "$line" "${ok_path[j]}"
-      else
-        printf '%s\n' "$line"
-      fi
-      j=$((j+1))
-    else
-      printf '%s\n' "$line"
+  # the resolved list the loop's resolve-tasks step published, when it still matches; otherwise
+  # live resolution, chunk by chunk, writing nothing.
+  local rset=() rcls=() rpath=() cls p _id nonempty=()
+  for (( k = 0; k < nu; k++ )); do [ -n "${uids[k]}" ] && nonempty+=("${uids[k]}"); done
+  if [ "${#nonempty[@]}" -gt 0 ]; then
+    k=0
+    while IFS=$'\t' read -r _id cls p; do
+      while [ -z "${uids[k]}" ]; do rset[k]=1; rcls[k]=missing; k=$((k+1)); done
+      rset[k]=1; rcls[k]=$cls; rpath[k]=$p; k=$((k+1))
+    done < <(resolved_lines "${nonempty[@]}")
+  fi
+
+  # held tag: live fleet state, computed on every call, never cached (BUG 079). A failed scan
+  # leaves every Task free and untagged — the tag is advice, claim stays the authority.
+  local held hflag=() tag=$' \xe2\x9a\x92\xef\xb8\x8f held by a live peer'
+  if ! held=$(held_ids); then
+    echo "zero.sh todo-list: warning: held-peer scan failed, held Tasks are not tagged" >&2
+    held=""
+  fi
+  if [ -n "$held" ]; then
+    held=$'\n'"$held"$'\n'
+    for (( k = 0; k < nu; k++ )); do
+      [ -n "${uids[k]}" ] && [[ "$held" == *$'\n'"$(sanitize_id "${uids[k]}")"$'\n'* ]] && hflag[k]=1
+    done
+  fi
+
+  local keep=() late=() nfree=0 lastfree="" more=0
+  for (( k = 0; k < nu; k++ )); do
+    [ -n "${hflag[k]:-}" ] && { keep[k]=1; todo_resolve_from "$k" 1; }
+  done
+  for (( k = start; k < nu; k++ )); do
+    [ -n "${hflag[k]:-}" ] && continue
+    todo_resolve_from "$k" 4
+    if [ "${rcls[k]}" = ok ]; then
+      if [ "$nfree" -lt 3 ]; then nfree=$((nfree+1)); lastfree=${uids[k]}; keep[k]=1
+      else more=1; break; fi
+    elif [ "$nfree" -lt 3 ]; then keep[k]=1
+    else late+=("$k")
     fi
-  done <<<"$raw"
+  done
+  # no free Task follows the page: its unusable Tasks past the third free one have no later page
+  if [ "$more" = 0 ]; then for k in ${late[@]+"${late[@]}"}; do keep[k]=1; done; fi
+
+  local line pre tok post
+  if [ -z "$cursor" ]; then
+    [ "${#landed[@]}" -gt 0 ] && printf 'Landed: %s\n' "${landed[*]}"
+    for line in "${ctx[@]+"${ctx[@]}"}"; do printf '%s\n' "$line"; done
+  fi
+  for (( k = 0; k < nu; k++ )); do
+    [ -n "${keep[k]:-}" ] || continue
+    line=${ulines[k]}
+    if [ -n "${hflag[k]:-}" ] && [[ "$line" =~ ^([[:space:]]*-\ \[\ \][[:space:]]*)([^[:space:]]+)(.*)$ ]]; then
+      pre=${BASH_REMATCH[1]}; tok=${BASH_REMATCH[2]}; post=${BASH_REMATCH[3]}
+      line="$pre$tok$tag$post"
+    fi
+    if [ "${rcls[k]:-}" = ok ]; then printf '%s  %s\n' "$line" "${rpath[k]}"; else printf '%s\n' "$line"; fi
+  done
+  if [ "$more" = 1 ]; then printf 'Next page: todo-list %s\n' "$lastfree"; else echo 'Next page: none'; fi
+}
+
+# task-file ID: the Task file of the Task with id ID, Landed or not, found by file-name matching of
+# that one id as claim finds it. A lookup that finds none says why on stdout and still exits 0.
+task_file() {
+  local id="${1-}" tid tcls trest on=0 rid _t
+  while IFS=$'\t' read -r rid _t; do [ "$rid" = "$id" ] && { on=1; break; }; done < <(todo_lines)
+  if [ "$on" = 0 ]; then echo "No Task file for $id: not on the Todo List"; return 0; fi
+  IFS=$'\t' read -r tid tcls trest < <(printf '%s\n' "$id" | resolve_task_ids)
+  case "$tcls" in
+    ok)        printf '%s\n' "$trest" ;;
+    ambiguous) echo "No Task file for $id: several files match" ;;
+    *)         echo "No Task file for $id: no file matches" ;;
+  esac
 }
 
 # raw id \t title text, one per line, for every checkbox line on the coordination base's Release
@@ -5601,7 +5871,8 @@ is_done() {
 # Task X's holder dying even when the total held COUNT stays identical (a different peer claims
 # something else in the same tick).
 held_ids() {
-  local path branch id pid st cur
+  local path branch id pid st cur wl
+  wl=$(git -C "$COORD_ROOT" worktree list --porcelain 2>/dev/null) || return 1
   while IFS=$'\t' read -r path branch; do
     case "$branch" in "$COORD_BASE-task-"*) id=${branch#"$COORD_BASE"-task-} ;; *) continue ;; esac
     [ -f "$path/.owner" ] || continue
@@ -5611,9 +5882,10 @@ held_ids() {
     cur=""
     if [ -f "$SESSION_DIR/$pid" ]; then { read -r _; read -r cur; } < "$SESSION_DIR/$pid" 2>/dev/null || cur=""; fi
     [ "$cur" = "$id" ] && printf '%s\n' "$id"
-  done < <(git -C "$COORD_ROOT" worktree list --porcelain | awk '
+  done < <(awk '
     /^worktree /            { p = substr($0, 10) }
-    /^branch refs\/heads\// { printf "%s\t%s\n", p, substr($0, 19) }')
+    /^branch refs\/heads\// { printf "%s\t%s\n", p, substr($0, 19) }' <<<"$wl")
+  return 0
 }
 
 # deterministic signature for "what would have to change before a retry could possibly claim
@@ -6210,6 +6482,111 @@ prog_end() {
   printf '\r\033[K' >&4 || true
 }
 
+# step lock (ISSUE 081): validate-tasks and resolve-tasks each run their check-and-build under their
+# own flock on fd 12, so launchers reaching a changed backlog together walk it once. A caller that
+# misses its cache calls lock_step, re-checks the cache against a fresh signature, and rebuilds only
+# on a second miss; the kernel drops the lock when the process ends, kill -9 included, and the
+# step's own process is the only holder, so no session ever inherits it. A lock that cannot be
+# opened or taken costs the lock, never the step. No timeout: a live holder is waited for.
+# lock_step FILE WHAT — a waiting caller draws one line on fd 4 like prog_start does: plain mode at
+# once, bar mode once KAIZERO_PROGRESS_DELAY seconds have passed, nothing without a descriptor.
+lock_step() {
+  local d mode=off snow='' msg
+  { exec 12>"$1"; } 2>/dev/null || return 0
+  "$FLOCK_BIN" -n 12 2>/dev/null && return 0
+  case "${KAIZERO_PROGRESS_DELAY:-}" in
+    '' | *[!0-9]* ) d=$PROG_DELAY_DEFAULT ;;
+    * )             d=$KAIZERO_PROGRESS_DELAY ;;
+  esac
+  if { : >&4; } 2>/dev/null; then if [ -t 4 ]; then mode=bar; else mode=plain; fi; fi
+  [ "${KAIZERO_COLOR:-0}" = 1 ] && snow='❄ '
+  msg="${snow}Waiting for another launcher to finish $2"
+  case "$mode" in
+    plain) printf '%s\n' "$msg" >&4 || true ;;
+    bar)   if [ "$d" -gt 0 ]; then
+             "$FLOCK_BIN" -w "$d" 12 2>/dev/null && return 0   # still held after the delay: draw, then block
+           fi
+           printf '\r%s\033[K' "$msg" >&4 || true ;;
+  esac
+  "$FLOCK_BIN" 12 2>/dev/null || exec 12>&-
+  [ "$mode" = bar ] && { printf '\r\033[K' >&4 || true; }
+  return 0
+}
+unlock_step() { exec 12>&-; }
+
+# resolved list (BUG 078): resolve_task_ids' answer for every unchecked id, built once per change by
+# the loop's resolve-tasks step and read by todo-list. Keyed like the task-definition cache on the
+# filesystem signature (sorted candidate paths plus the unchecked ids, both file-name facts), but with
+# no timestamp comparison: resolution depends on names only, so a content edit does not stale it.
+# Line 1 is the signature, then one resolve_task_ids line per non-empty id, in order.
+resolved_cache_file() {
+  local key
+  key=$(printf '%s\x1e%s\n' "$COORD_BASE" "$TODO_PATH" | cksum | awk '{print $1}')
+  printf '%s/task-resolved-%s' "$COORD_GITDIR" "$key"
+}
+
+# sets TS_CANDS (the candidate paths of the ids in "$@") and TS_SIG (their signature)
+tasks_signature() {
+  TS_CANDS=(); TS_SIG=''
+  local p
+  while IFS= read -r -d '' p; do TS_CANDS+=("$p"); done < <(printf '%s\n' "$@" | candidate_paths)
+  TS_SIG=$( { printf '%s\n' "$@"; printf '\x1e%s\n' "${#TS_CANDS[@]}"; printf '%s\n' "${TS_CANDS[@]+"${TS_CANDS[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || TS_SIG=''
+}
+
+# resolved_lines ID... — prints the cached resolution of the non-empty ids and exits 0, only while
+# the list's signature matches the files and ids as they are now and every line is for the id in
+# its place; any other state (missing, unreadable, corrupt, mismatching) prints nothing, exits 1.
+resolved_lines() {
+  local f ids=() id body hdr line lines=() j
+  for id in "$@"; do [ -n "$id" ] && ids+=("$id"); done
+  [ "${#ids[@]}" -gt 0 ] || return 1
+  f=$(resolved_cache_file); [ -f "$f" ] || return 1
+  body=$(cat "$f" 2>/dev/null) || return 1
+  tasks_signature "${ids[@]}"
+  hdr="${body%%$'\n'*}"
+  { [ -n "$TS_SIG" ] && [ "$hdr" = "$TS_SIG" ] && [ "$body" != "$hdr" ]; } || return 1
+  while IFS= read -r line; do lines+=("$line"); done <<<"${body#*$'\n'}"
+  [ "${#lines[@]}" = "${#ids[@]}" ] || return 1
+  for (( j = 0; j < ${#ids[@]}; j++ )); do
+    [ "${lines[j]%%$'\t'*}" = "${ids[j]}" ] || return 1
+  done
+  printf '%s\n' "${lines[@]}"
+}
+
+# resolve-tasks: the loop step that builds the resolved list. No verdict (an id resolving to none or
+# several is recorded, not reported), independent of validate-tasks, and silent on both streams —
+# the callers capture them and read any byte as a finding. A git directory it cannot write costs the
+# cache only. A hit draws nothing; a rebuild draws validate-tasks' display under its own label.
+resolve_tasks() {
+  local ids=() id started cachefile tmp line out=() locked=0
+  while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
+  [ "${#ids[@]}" -gt 0 ] || return 0
+  cachefile=$(resolved_cache_file)
+  started=$SECONDS
+  # first check lock-free; a miss takes the lock and checks again against the files as they are then
+  while :; do
+    tasks_signature "${ids[@]}"
+    [ -n "$TS_SIG" ] || { unlock_step; return 0; }
+    resolved_lines "${ids[@]}" >/dev/null 2>&1 && { unlock_step; return 0; }
+    [ "$locked" = 0 ] || break
+    lock_step "$COORD_GITDIR/resolve-tasks-${cachefile##*-}.lock" 'resolving task files'; locked=1
+  done
+  PROG_LABEL='Resolving task files'
+  prog_start "${#ids[@]}" "$started"
+  while IFS= read -r line; do out+=("$line"); prog_tick; done \
+    < <(printf '%s\n' "${ids[@]}" | resolve_task_ids -- "${TS_CANDS[@]+"${TS_CANDS[@]}"}")
+  prog_end
+  # published whole by rename, so a launcher starting at the same moment never reads a half file
+  tmp="$cachefile.tmp.$$"
+  if { printf '%s\n' "$TS_SIG"; printf '%s\n' "${out[@]}"; } 2>/dev/null > "$tmp"; then
+    mv -f "$tmp" "$cachefile" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  else
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  unlock_step
+  return 0
+}
+
 # task-definition cache (ISSUE 077): the walk below is the largest pre-launch cost and repeats
 # identically between sessions. It is keyed on a filesystem signature, never on a commit — Task
 # files may be gitignored or carry uncommitted edits, and both must keep invalidating it, which is
@@ -6238,12 +6615,16 @@ task_cache_file() {
 # validate_ids already follows — a run with findings proves nothing about a later one, so a backlog
 # with an unfixed finding walks (and reports progress) every time until it is fixed.
 validate_tasks() {
-  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile tmp started sig p hit=0
+  local id id2 cls paths findings=() total cap=5 shown i ids=() cands=() cachefile tmp started sig p hit=0 locked=0
   while IFS= read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(unchecked_tail_ids)
   if [ "${#ids[@]}" -gt 0 ]; then
     cachefile=$(task_cache_file)
     started=$SECONDS                       # the step's own start, before its first file search —
                                            # the display's threshold is measured from here
+    # first check lock-free; a miss takes the lock and checks again against the files as they are
+    # then (ISSUE 081), because the holder ahead has usually published by the time the lock is ours
+    while :; do
+    cands=(); hit=0
     while IFS= read -r -d '' p; do cands+=("$p"); done < <(printf '%s\n' "${ids[@]}" | candidate_paths)
     sig=$( { printf '%s\n' "${ids[@]}"; printf '\x1e%s\n' "${#cands[@]}"; printf '%s\n' "${cands[@]+"${cands[@]}"}" | LC_ALL=C sort; } | cksum | awk '{print $1}' ) || sig=''
     # an unreadable, empty, corrupt or absent cache file simply misses here and one honest walk follows.
@@ -6258,6 +6639,9 @@ validate_tasks() {
         if ! [ "$cachefile" -nt "$p" ]; then hit=0; break; fi
       done
     fi
+    if [ "$hit" != 0 ] || [ "$locked" != 0 ]; then break; fi
+    lock_step "$COORD_GITDIR/validate-tasks-${cachefile##*-}.lock" 'validating task definitions'; locked=1
+    done
     if [ "$hit" = 0 ]; then
       # the verdict is written now, BEFORE the walk reads a single Task file, and only renamed into
       # place once the walk comes back clean — `mv` inside one directory is a rename, which leaves
@@ -6298,6 +6682,7 @@ validate_tasks() {
       fi
     fi
   fi
+  unlock_step
   total=${#findings[@]}
   shown=$total; [ "$shown" -gt "$cap" ] && shown=$cap
   for (( i = 0; i < shown; i++ )); do fmt_task_finding "${findings[i]}" >&2; done
@@ -6322,17 +6707,18 @@ case "${1:-}" in
   no-claim-signature)     no_claim_signature ;;
   validate-ids)           validate_ids ;;
   validate-tasks)         validate_tasks ;;
-  todo-list)              todo_list ;;
+  resolve-tasks)          resolve_tasks ;;
+  todo-list)              todo_list "${2-}" ;;
+  task-file)              task_file "${2-}" ;;
   unchecked-todos)        unchecked_todos ;;
   target-branch)          target_branch "$2" "$3" ;;
   target-branches-for-id) target_branches_for_id "$2" ;;
   box-symbol-on-base)     box_symbol_on_base "$2" ;;
   sync-mrs)               sync_mrs ;;
-  *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | todo-list | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
+  *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | resolve-tasks | todo-list [ID] | task-file ID | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
 esac
 ZERO_EOF
-    } > "$gitdir/zero.sh"
-    chmod +x "$gitdir/zero.sh"
+    } | atomic_put "$gitdir/zero.sh" "" +x
     printf '%sWrote %s/zero.sh (base %s)\n' "$(icon)" "$gitdir" "$COORD_BASE" >&2
 }
 
@@ -6380,11 +6766,17 @@ Keep these facts in mind:
     `cd "$wt" && …` in a SINGLE command.
 
 === ALGORITHM (one Task, then end your turn) ===
-1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the tail of the Release Todo List,
-   from the two lines before the first Unlanded Task to the end. Tasks are GitHub-style Markdown
-   checkboxes, one per line, each carrying an id as the FIRST whitespace-delimited token after the
-   checkbox:
+1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the first page of the Release
+   Todo List: a `Landed:` line with the ids of every Landed Task (ids only; a link-shaped id is its
+   bracketed label), the two lines before the first Unlanded Task, every Unlanded Task a live peer
+   holds, and the first three free Tasks (Unlanded, held by nobody, one Task file resolved). Its last
+   line names where the next page starts: `Next page: todo-list ID`, or `Next page: none` when no
+   free Task follows. Take the next page — run `@@ZERO_SH@@ todo-list ID` with exactly that id — only
+   when none of the free Tasks seen so far can be claimed and the last line is not `Next page: none`.
+   Tasks are GitHub-style Markdown checkboxes, one per line, each carrying an id as the FIRST
+   whitespace-delimited token after the checkbox:
        - [ ] SMTH-855 some Task Unlanded /repo/tasks/SMTH-855.md  ← UNCHECKED = still to do
+       - [ ] SMTH-856 ⚒️ held by a live peer some Task /repo/tasks/SMTH-856.md  ← held = not a candidate
        - [x] 7.a some Task already Landed         ← CHECKED   = Landed, skip it
        - [?] 9 some Task Landed, needs review     ← any other symbol = Landed, not yours to claim
    That first token is the task_id (e.g. SMTH-855, 7, 7.a, [BUG-5348](tasks/...)). An UNCHECKED line ending in a path
@@ -6392,7 +6784,14 @@ Keep these facts in mind:
    claiming that candidate; it is that Task's full body, not the one-line summary before it. An
    UNCHECKED line with no appended path has no resolved Task file: there is nothing to judge or
    implement for it — skip it, do not judge its independence or attempt to claim it; try the next
-   one.
+   one. A line tagged "⚒️ held by a live peer" right behind its id is held by a live peer:
+     - it is not a candidate — never call `claim` for it and never Read its file as a candidate;
+     - it still counts as an unchecked Task when judging dependencies, and you may Read its Task
+       file (the path stays on the line) when that helps you judge whether a candidate depends on it;
+     - a refused `claim` on an untagged candidate still means skip to the next candidate, because
+       two sessions can pick the same free Task in the same moment.
+   When nothing seen can be claimed and the last line says `Next page: none`, end the session as
+   you would after walking the whole list without claiming.
        non-zero exit → STOP IMMEDIATELY: print `@@ZERO_SH@@ todo-list`'s stderr verbatim as the
                         reason and end your turn without claiming anything.
 2. For each candidate task_id, in order:
@@ -6411,6 +6810,11 @@ Keep these facts in mind:
            area" is NOT evidence.
       iv.  A prerequisite whose box is anything but `[ ]` never blocks — its code is merged, its
            output exists (a `[?]` is Landed code awaiting review, not missing code).
+      v.   Judge this Task against every unchecked Task: the Landed ids, the held Tasks and the free
+           Tasks seen so far. A Task named by id that is on the `Landed:` line never blocks; read its
+           file with `@@ZERO_SH@@ task-file ID` when you need to understand what it produced. When
+           this Task's body names an artifact whose producer is not among those, take further pages
+           until you find the producer or the last line says `Next page: none`.
       - Any inbound edge to an unchecked Task → skip to the next task_id.
       - No such edge (every claimed edge is either to a checked Task or unquotable)
         → continue to step b.
@@ -6575,11 +6979,17 @@ Keep these facts in mind:
     `cd "$wt" && …` in a SINGLE command.
 
 === ALGORITHM (one Task, then end your turn) ===
-1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the tail of the Release Todo List,
-   from the two lines before the first Unlanded Task to the end. Tasks are GitHub-style Markdown
-   checkboxes, one per line, each carrying an id as the FIRST whitespace-delimited token after the
-   checkbox:
+1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the first page of the Release
+   Todo List: a `Landed:` line with the ids of every Landed Task (ids only; a link-shaped id is its
+   bracketed label), the two lines before the first Unlanded Task, every Unlanded Task a live peer
+   holds, and the first three free Tasks (Unlanded, held by nobody, one Task file resolved). Its last
+   line names where the next page starts: `Next page: todo-list ID`, or `Next page: none` when no
+   free Task follows. Take the next page — run `@@ZERO_SH@@ todo-list ID` with exactly that id — only
+   when none of the free Tasks seen so far can be claimed and the last line is not `Next page: none`.
+   Tasks are GitHub-style Markdown checkboxes, one per line, each carrying an id as the FIRST
+   whitespace-delimited token after the checkbox:
        - [ ] SMTH-855 some Task Unlanded /repo/tasks/SMTH-855.md  ← UNCHECKED = still to do
+       - [ ] SMTH-856 ⚒️ held by a live peer some Task /repo/tasks/SMTH-856.md  ← held = not a candidate
        - [x] 7.a some Task already Landed         ← CHECKED   = Landed, skip it
        - [↑] 3 some Task under review              ← already spoken for, not yours to claim
        - [⛔] 5 some Task declined                  ← already spoken for, not yours to claim
@@ -6589,7 +6999,14 @@ Keep these facts in mind:
    claiming that candidate; it is that Task's full body, not the one-line summary before it. An
    UNCHECKED line with no appended path has no resolved Task file: there is nothing to judge or
    implement for it — skip it, do not judge its independence or attempt to claim it; try the next
-   one.
+   one. A line tagged "⚒️ held by a live peer" right behind its id is held by a live peer:
+     - it is not a candidate — never call `claim` for it and never Read its file as a candidate;
+     - it still counts as an unchecked Task when judging dependencies, and you may Read its Task
+       file (the path stays on the line) when that helps you judge whether a candidate depends on it;
+     - a refused `claim` on an untagged candidate still means skip to the next candidate, because
+       two sessions can pick the same free Task in the same moment.
+   When nothing seen can be claimed and the last line says `Next page: none`, end the session as
+   you would after walking the whole list without claiming.
        non-zero exit → STOP IMMEDIATELY: print `@@ZERO_SH@@ todo-list`'s stderr verbatim as the
                         reason and end your turn without claiming anything.
 2. For each candidate task_id, in order:
@@ -6610,6 +7027,11 @@ Keep these facts in mind:
            `[ ]` (not started), `[↑]` (in review, not merged yet), `[⛔]` (declined) and `[?]`
            (needs a human) — and any other symbol — are all NOT in the base yet: an inbound edge
            to any of them blocks this Task. Skip it and try the next id.
+      v.   Judge this Task against every unchecked Task: the Landed ids, the held Tasks and the free
+           Tasks seen so far. A Task named by id that is on the `Landed:` line never blocks; read its
+           file with `@@ZERO_SH@@ task-file ID` when you need to understand what it produced. When
+           this Task's body names an artifact whose producer is not among those, take further pages
+           until you find the producer or the last line says `Next page: none`.
       - Any inbound edge to a Task whose box is not `[x]` → skip to the next task_id.
       - No such edge (every claimed edge is either to an `[x]` Task or unquotable)
         → continue to step b.

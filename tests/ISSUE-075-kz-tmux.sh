@@ -66,10 +66,11 @@ check "T4 zero count usage on stderr" "$(grep -qi usage "$d/err.log" && echo yes
 
 check "T5 no stray sessions from arg-error runs" "$(tmux list-sessions 2>/dev/null | wc -l | tr -d ' ')" "0"
 
-# waits until SESSION has at least N panes, or gives up after ~5s
+# waits until SESSION has at least N panes, or gives up after ~30s (kz-tmux.sh splits panes in the
+# background, which a loaded host can delay well past 5s)
 wait_panes(){ local s="$1" n="$2" i=0
   while [ "$(tmux list-panes -t "$s" 2>/dev/null | wc -l | tr -d ' ')" -lt "$n" ]; do
-    i=$((i+1)); [ "$i" -ge 50 ] && return 1; sleep 0.1; done; return 0; }
+    i=$((i+1)); [ "$i" -ge 300 ] && return 1; sleep 0.1; done; return 0; }
 
 # runs kz-tmux.sh detached from a real terminal, in its own dir under $TK. kz-tmux.sh names its
 # session kz-<basename of cwd>-<its own pid>, so SESSION is computed the same way the caller's

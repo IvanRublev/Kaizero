@@ -39,7 +39,7 @@ check_layout(){
   local log; log="$TT/$label.log"
   ( cd "$launch_dir"; PATH="$TT/bin:$PATH" KAIZERO_TEST_ARGS_TAG="$label" timeout 20 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge "$todo_arg" -t x < /dev/null > "$log" 2>&1 )
   local j; j="$(settings_json "$TT/$label.args")"
-  check "$label has hooks.Stop" "$(printf '%s' "$j" | grep -c '"hooks":{"Stop"')" "1"
+  check "$label has hooks.Stop" "$(printf '%s' "$j" | grep -c '"Stop":\[{"hooks"')" "1"
   check "$label has \$defaults" "$(printf '%s' "$j" | grep -c '"environment":\["\$defaults"')" "1"
   check "$label environment has WT_PARENT" "$(printf '%s' "$j" | grep -Fc "\"$wt_parent\"")" "1"
   check "$label environment has COORD_ROOT" "$(printf '%s' "$j" | grep -Fc "\"$coord_root\"")" "1"

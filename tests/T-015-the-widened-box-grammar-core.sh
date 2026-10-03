@@ -50,7 +50,7 @@ for loc in C en_US.UTF-8; do
   # want 0 — a ✓ box is Landed
   check "T22 $loc done F" "$(zs22 "$loc" "done" F >/dev/null 2>&1; echo $?)" "0"
   # want 1 — not dropped
-  check "T22 $loc todo-list has F" "$(zs22 "$loc" todo-list | grep -c 'F checkmark landed')" "1"
+  check "T22 $loc todo-list has F" "$(zs22 "$loc" todo-list | grep -c '^Landed:.* F\( \|$\)')" "1"
   # want 0 — todo_lines/leg1_ids parse every box's id past a multi-byte symbol
   check "T22 $loc validate-ids" "$( (export LC_ALL="$loc"; cd "$TT/plan22" && KAIZERO_TASK_ID_PATTERN='.' bash "$ZS22" validate-ids) >/dev/null 2>&1; echo $?)" "0"
 done
