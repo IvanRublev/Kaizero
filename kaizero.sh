@@ -2646,7 +2646,7 @@ hide_interviews() {
 # three Tasks and the operator has not hidden it. Styled: indented, colored lines; plain: the same
 # lines, unindented and uncolored, in a box. Blank lines: one before, two after (the panel adds its own).
 print_interview_invite() {
-  local d n; d="$(kz_state_dir)"
+  local d n; d="$(kz_state_dir)" || return 0   # fail-open: no HOME, no invitation, report still prints
   [ ! -e "$d/interviews-hidden" ] || return 0
   n="$(read_counter "$d/landed-count")"; [ "$n" -ge 3 ] || return 0
   local q="Is your Claude Code loop slower than it should be?"
