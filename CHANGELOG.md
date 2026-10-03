@@ -4,6 +4,29 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-10-03
+
+### Added
+
+- Long Todo Lists are shown in short pages that say where the next page starts, so a session
+  works through a big list without loading all of it at once.
+
+### Changed
+
+- Sessions no longer wait 10 to 114 seconds on a long Todo List before they can claim a Task.
+  The list is prepared once and reused until it changes.
+- Several Kaizero instances running together share the Task file check and the list preparation:
+  it runs once per change and the others wait for the result.
+- The Todo List marks Tasks that another running instance already holds, so a session picks a
+  free Task straight away instead of finding out from a refused claim.
+
+### Fixed
+
+- An instance that read a helper script or shared record while another instance was rewriting it
+  no longer gets a truncated file and a syntax error.
+- A session can no longer switch its Task off the Task's branch, so another instance no longer
+  takes over a Task that is still being worked on.
+
 ## [0.1.7] - 2026-09-29
 
 ### Added
