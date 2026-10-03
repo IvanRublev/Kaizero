@@ -64,11 +64,12 @@ usage: @@PROG@@ [todo-file-path] [--local-merge] [--always-on] [--no-co-authorsh
        @@PROG@@ --version
 version @@VERSION@@
 
-  Loops claude to zero a Markdown Release Todo List — fork a worktree per Task, implement,
-  commit, and hand it to review as a pull/merge request or merge it locally; the Task's
-  box is ticked once it lands on the base branch — restart on fresh context, until every
-  box is checked. Run several in parallel; they claim Tasks via git worktrees. Ctrl+C in
-  the @@RESTART_WAIT@@s gap stops.
+  Loops Claude on a Release Todo List until every Task is implemented, committed, and
+  checked off.
+  Each Task gets its own git worktree. Kaizero opens a pull/merge request for it, or merges
+  it locally with --local-merge, and ticks the box once the commit lands on the base branch.
+  Claude restarts on a fresh context after every Task.
+  Ctrl+C during the @@RESTART_WAIT@@s gap stops the loop.
 
   todo-file-path              The Release Todo List to zero. Omitted → prompted for it.
   -t, --taskprompt TEXT       Alterations appended after step c's fixed per-Task instruction
