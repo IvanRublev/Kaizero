@@ -213,10 +213,12 @@ check "O6 no launches" "$(wc -l < "$STUB_LAUNCHED" | tr -d ' ')" "0"
 # O10 — BUG 086: an entry may be a file, not only a directory. A launch accepts it, a claim links
 # it as a symlink with an info/exclude line, and a name already present in the worktree is skipped.
 printf 'seed\n' > "$TO/repo/.env-seed"; EXR="$(git rev-parse --git-path info/exclude)"; echo '/.env-seed' >> "$EXR"   # keeps the launch's clean-tree check quiet
+check "O10 empty entry exit" "$(run_bad 'tasks,,sources' empty)" "1"
+check "O10 empty entry names it" "$(grep -c "Empty entry in KAIZERO_LINK" "$TO/bad-empty.log")" "1"
 check "O10 file launch exit" "$(run_bad '.env-seed' file)" "0"
 check "O10 file not refused" "$(grep -c 'KAIZERO_LINK entry' "$TO/bad-file.log")" "0"
 printf -- '### Acceptance criteria\n- [ ] x\n' > tasks/O3.md
-sed -i.bak '/^\/\.env-seed$/d' "$EXR"   # the claim itself must write the exclude line
+grep -vxF '/.env-seed' "$EXR" > "$EXR.new"; mv "$EXR.new" "$EXR"   # the claim itself must write the exclude line
 ZERO10="$TO/repo/.git/zero.sh"
 wt10=$(KAIZERO_LINK=.env-seed "$ZERO10" claim O3 2>"$TO/o10.err")
 check "O10 file symlink" "$([ -L "$wt10/.env-seed" ] && [ "$(readlink "$wt10/.env-seed")" = "$TO/repo/.env-seed" ] && echo yes || echo NO)" "yes"
