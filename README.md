@@ -19,14 +19,14 @@ You can spawn multiple instances to parallelize.<br><br>
 > 💬 Is your Claude Code loop slower than it should be? You can bring your config and hooks to a [free 20-minute review from the Kaizero author](https://go.ivanrublev.com/book-review-gh) or tell about it in the [five questions survey](https://go.ivanrublev.com/survey-gh
 ). We'll find what to change together, and I'll learn what slows your down.
 
-Runs [`claude`](https://claude.com/product/claude-code) on a predefined prompt in a loop on the given Todo List — the file of Task lines selected to ship together as one Release. Makes it hand off each Task for review by default, or land it directly with `--local-merge`: implement, commit, and open a merge/pull request or merge to the base branch — then check the box off once the work reaches the base branch. The session stays interactive, so you can add prompts and make choices as it runs. Launches `claude` in auto permission mode by default, and restarts it on a fresh context before rot sets in.
+Kaizero runs [`claude`](https://claude.com/product/claude-code) on a predefined prompt in a loop on the given Todo list — the file of Task lines selected to ship together as one Release. For each task, it builds an implementation and either opens a merge/pull request or merges to the base branch when you start it with `--local-merge` option. Kaizero restarts claude before the [context rot](#context-rot) sets in and after each completed task so the fresh instance picks up the changes in CLAUDE.md
 
 ## Contents
 
 - [What it does](#what-it-does)
 - [Quickstart](#quickstart)
 - [Install](#install-for-the-claude-coding-agent)
-- [Todo List format](#todo-list-format)
+- [Todo list format](#todo-list-format)
 - [Context Rot](#context-rot)
 - [Loop engineering](#loop-engineering)
 - [Usage](#usage)
@@ -38,7 +38,7 @@ Runs [`claude`](https://claude.com/product/claude-code) on a predefined prompt i
 
 ## What it does
 
-- **Guides Claude to zero a Todo List unattended** — one Task at a time until all are implemented, committed, and checked off.
+- **Guides Claude to zero a Todo list unattended** — one Task at a time until all are implemented, committed, and checked off.
 - **Beats context rot** — session Stop hook SIGTERMs `claude` once its context total crosses a threshold (see [Context rot](#context-rot)) and restarts clean. Fresh context, no quality decay.
 - **One Task per session** — `claude` exits once it has zeroed a single Task and the script restarts it, so every Task runs on a context isolated from the Task before it, which cuts token spend (~20% on a working instance). An instance that has nothing to claim waits in the shell without launching `claude` at all, spending nothing.
 - **Parallel by default** — run many instances at once; they coordinate via git worktrees, each claiming Tasks the others haven't taken.
@@ -56,10 +56,10 @@ sudo curl -fsSL https://raw.githubusercontent.com/IvanRublev/kaizero/refs/heads/
 sudo chmod +x /usr/local/bin/kz-tmux
 ```
 
-Make sure that your Todo List file is committed in the git repository which is separate from you codebase one.
+Make sure that your Todo list file is committed in the git repository which is separate from you codebase one.
 Make sure the working tree of both repositories are in a clean state (commit or stash any changes).
 
-Then run `kaizero` pointing to your Todo List to work through it with one agent, picking the mode by how the work gets reviewed:
+Then run `kaizero` pointing to your Todo list to work through it with one agent, picking the mode by how the work gets reviewed:
 
 ```sh
 kaizero todo.md                 # team merge (pull) requests review
@@ -73,13 +73,13 @@ full `kaizero` command to run in each — it tiles them into one tmux session:
 kz-tmux 6 kaizero todo.md
 ```
 
-> ⚠️ Kaizero runs `claude` **unattended with permissions auto-approved** and **commits on its own** to the branch you launch it on. Only ever point it at a Todo List you wrote or reviewed, on a branch with a clean, committed tree — git is your only undo.
+> ⚠️ Kaizero runs `claude` **unattended with permissions auto-approved** and **commits on its own** to the branch you launch it on. Only ever point it at a Todo list you wrote or reviewed, on a branch with a clean, committed tree — git is your only undo.
 
 ### Sample output
 
 Representative run of a default launch: two repositories, `origin` on `github`, each Task landing
 as a pull request (LLM agent output between the markers elided). Standing in `~/repos/acme-api`, the
-Todo List in `~/repos/acme-planning/todo.md`:
+Todo list in `~/repos/acme-planning/todo.md`:
 
 ```console
 $ kaizero ../acme-planning/todo.md
@@ -168,7 +168,7 @@ Transcripts are only ever read, and no schema change can fail a run — any pars
 
 Two limits: **subagent tokens are invisible** — a session that used the Agent tool writes no `isSidechain` usage lines, so anything the Task prompt spawns is missing from the totals, and the size of the under-count is not measurable from inside; and the figures are **per instance run, for this repo only**, unlike whole-machine tools such as `ccusage`, whose denominator is every Claude Code session on the box.
 
-## Todo List format
+## Todo list format
 
 GitHub-style Markdown checkboxes, one Task per line. Each line carries a **unique id** as the first whitespace-delimited token right after the checkbox — it names the Task's branch and worktree. That first token may also be a markdown link `[ID](path)` (no space between `]` and `(`, no nested brackets) — the bracketed label is the id, the path is ignored:
 
@@ -209,7 +209,7 @@ The model-threshold table is defined as `CONTEXT_THRESHOLDS` in the kaizero scri
 
 [Loop engineering](https://claude.com/blog/getting-started-with-loops) shapes an agent's iteration cycle so it gets *better* across turns, not just runs once. It is the outermost of three nested levels — each one only works because the one under it holds:
 
-1. **Spec** — what to build: the Problem Statement, the Design Doc, and the Tasks with the Acceptance Criteria reached through the Todo List (see [CONTEXT.md](docs/CONTEXT.md) for the full vocabulary). Without it the layers above have nothing to check against.
+1. **Spec** — what to build: the Problem Statement, the Design Doc, and the Tasks with the Acceptance Criteria reached through the Todo list (see [CONTEXT.md](docs/CONTEXT.md) for the full vocabulary). Without it the layers above have nothing to check against.
 2. **Harness** — how to keep the agent on the Spec, in two directions. *Feedforward* guides steer before it acts (`CLAUDE.md`, conventions, templates); *feedback* sensors catch after (tests, linters, type checks, review). Feedback alone repeats the same mistakes; feedforward alone never proves it worked. Here: the per-iteration algorithm below, plus whatever guides and checks your repo already has.
 3. **Loop** — who does the prompting. The harness on a timer: self-triggering runs, isolated worktrees, subagents that verify and feed back. You stop prompting turn by turn and start designing the thing that prompts itself. Here: Kaizero with `--taskprompt` instruction on how to learn by prompting itself.
 
@@ -224,16 +224,16 @@ Kaizero owns the mechanics and leaves the learning to you. It drills the *form* 
 
 The kata is a strict algorithm every instance runs, one Task per `claude` session:
 
-1. Find & validate — collect Tasks with `zero.sh todo-list`, read from the committed Release Todo List blob, never the working tree, in pages: the first page is a `Landed:` line with the ids of every Landed Task, the leading context lines, every Task held by a live peer (tagged `⚒️ held by a live peer` right behind its id) and three free Tasks, and its last line `Next page: todo-list ID` (or `Next page: none`) gives the exact argument for the next page; `zero.sh task-file ID` prints the Task file of any Task by its id; a missing or duplicate id stops the loop; each Task's file path comes from a resolved list the loop rebuilds with `zero.sh resolve-tasks` whenever a Task file name or an unchecked id changes.
+1. Find & validate — collect Tasks with `zero.sh todo-list`, read from the committed Release Todo list blob, never the working tree, in pages: the first page is a `Landed:` line with the ids of every Landed Task, the leading context lines, every Task held by a live peer (tagged `⚒️ held by a live peer` right behind its id) and three free Tasks, and its last line `Next page: todo-list ID` (or `Next page: none`) gives the exact argument for the next page; `zero.sh task-file ID` prints the Task file of any Task by its id; a missing or duplicate id stops the loop; each Task's file path comes from a resolved list the loop rebuilds with `zero.sh resolve-tasks` whenever a Task file name or an unchecked id changes.
 2. Judge independence by evidence — blocked only if the body quotably consumes an *unchecked* Task's output; adjacency is not a dependency.
 3. Claim & re-check — one Task per git worktree (branch = claim), then guard against a peer who already Landed it.
-4. Implement, commit — scoped to that Task; the Todo List is read-only, never edited by the agent.
+4. Implement, commit — scoped to that Task; the Todo list is read-only, never edited by the agent.
 5. Merge serially — the box is ticked on the base after the code lands; on a conflict, resolve once, else stop and hand off to the user rather than corrupt the base.
 6. End the session — the shell starts a fresh one for the next Task, or waits without spending a token while peers hold the rest; when every box is checked, announce every Task Landed and stop.
 
 ### Closing the loop
 
-Learning rides *inside* this form. A restart is amnesiac by design — it throws away rotten context; only durable external state survives: git, the Todo List, and `CLAUDE.md`, one of several [steering channels](https://claude.com/blog/steering-claude-code-skills-hooks-rules-subagents-and-more) Claude re-reads on every fresh run.
+Learning rides *inside* this form. A restart is amnesiac by design — it throws away rotten context; only durable external state survives: git, the Todo list, and `CLAUDE.md`, one of several [steering channels](https://claude.com/blog/steering-claude-code-skills-hooks-rules-subagents-and-more) Claude re-reads on every fresh run.
 
 Kaizero never writes `CLAUDE.md` — the harness stays learning-agnostic, so you choose what's remembered.
 
@@ -273,9 +273,9 @@ kaizero -h
 
 Kaizero forks a worktree per Task off the current branch.
 
-**`path-to-todo.md`** — stand in the code repository and pass the Todo List's path. If it's inside that same repository, it is a fork-merge: implement, commit, merge, tick the box, all on one branch. If it's inside a different repository, that one becomes the **coordination repository**: the code stays on a branch in the code repository (the **target**) until merge, then lands on its base there, and only the checkbox commit lands in the coordination repository. A Todo List path inside a linked (non-main) worktree, or two repositories nested without one being `.gitignore`d or a submodule of the other, refuse to launch.
+**`path-to-todo.md`** — stand in the code repository and pass the Todo list's path. If it's inside that same repository, it is a fork-merge: implement, commit, merge, tick the box, all on one branch. If it's inside a different repository, that one becomes the **coordination repository**: the code stays on a branch in the code repository (the **target**) until merge, then lands on its base there, and only the checkbox commit lands in the coordination repository. A Todo list path inside a linked (non-main) worktree, or two repositories nested without one being `.gitignore`d or a submodule of the other, refuse to launch.
 
-Branch naming follows the layout: a same-repository launch claims each Task on the exact branch `<base>-task-<id>` (`master-task-7`), while a two-repository launch names a fresh target branch `<id>-<title-slug>` (`7-add-login-form`). A branch named exactly `<id>`, or starting `<id>-`, is that Task's and is adopted — unless a longer id on the Todo List claims it by that same test: `7-1` and `7-1-add-flag` both read as Task `7-1`'s, never Task `7`'s. So a pre-existing branch named `<id>-anything` in the target is that Task's, and a later claim adopts it (the same reattach/steal semantics a same-repository claim branch already has). Deleted a Task from the Todo List? Delete or rename its branch too, or it lingers as an orphan the next id can't match. ids are tracker keys, **unique per target over time** — never add a new Task id that prefix-extends an existing (adopted) id's branch name, e.g. don't add `7-1` once `7`'s branch exists; rename the branch instead. Reopen a Landed Task by unchecking its box — the next claim reattaches to the branch that already carries its work (delete the branch too, for a clean slate, if you want it to start over; in MR mode this holds unconditionally, since a branch whose work already merged into origin's base is never adopted from origin either — that Task forks fresh off `origin/<base>` whether or not the local branch is deleted). A Task whose deliverable is the coordination repository itself is zeroed by pointing `kaizero` at a Todo List inside that same repository — a one-repository launch there, not a separate target.
+Branch naming follows the layout: a same-repository launch claims each Task on the exact branch `<base>-task-<id>` (`master-task-7`), while a two-repository launch names a fresh target branch `<id>-<title-slug>` (`7-add-login-form`). A branch named exactly `<id>`, or starting `<id>-`, is that Task's and is adopted — unless a longer id on the Todo list claims it by that same test: `7-1` and `7-1-add-flag` both read as Task `7-1`'s, never Task `7`'s. So a pre-existing branch named `<id>-anything` in the target is that Task's, and a later claim adopts it (the same reattach/steal semantics a same-repository claim branch already has). Deleted a Task from the Todo list? Delete or rename its branch too, or it lingers as an orphan the next id can't match. ids are tracker keys, **unique per target over time** — never add a new Task id that prefix-extends an existing (adopted) id's branch name, e.g. don't add `7-1` once `7`'s branch exists; rename the branch instead. Reopen a Landed Task by unchecking its box — the next claim reattaches to the branch that already carries its work (delete the branch too, for a clean slate, if you want it to start over; in MR mode this holds unconditionally, since a branch whose work already merged into origin's base is never adopted from origin either — that Task forks fresh off `origin/<base>` whether or not the local branch is deleted). A Task whose deliverable is the coordination repository itself is zeroed by pointing `kaizero` at a Todo list inside that same repository — a one-repository launch there, not a separate target.
 
 ### Landing as a merge/pull request (the default MR mode)
 
@@ -354,7 +354,7 @@ threads:
    coordination repository — allowed while the Task is Unlanded: sharpen How to build, add or
    reword an Acceptance Criterion, add an Absence Check for what the reviewer wants gone. A thread
    that only asks for a code change the existing criteria already imply needs no Task edit.
-3. Clear the box to `[ ]` and commit the Task file and the Todo List together on the coordination
+3. Clear the box to `[ ]` and commit the Task file and the Todo list together on the coordination
    base.
 4. If origin's copy of the branch moved since the Hand off — a reviewer committed on it, or a
    rework was pushed from another machine — move the local branch onto it **before** clearing the
@@ -402,7 +402,7 @@ or merged where it now stands) resolves the box the same way any other merge/dec
 
 **Two launch refusals guard against a half-applied run.** A fleet already driving this target in
 the *other* mode (MR mode vs. local-merge mode) refuses at launch — one fleet, one mode. A Release
-Todo List carrying any `[↑]` box refuses a `--local-merge` launch, naming the count — drop the flag to keep
+Todo list carrying any `[↑]` box refuses a `--local-merge` launch, naming the count — drop the flag to keep
 driving them, or resolve them by hand first.
 
 `KAIZERO_WATCHDOG` still applies to a request-landing session: a push that hangs is
@@ -465,13 +465,13 @@ straight to the base branch with no review step — review the commits it produc
 
 Three layouts need it, and cannot run without it:
 
-- **a same-repository layout** — the Todo List lives in the repository being changed, so a merge
+- **a same-repository layout** — the Todo list lives in the repository being changed, so a merge
   request has nowhere to go and MR mode refuses outright;
 - **a repository with no `origin` remote** — nothing to hand a Task off to;
 - **a repository whose `origin` is on neither `github` nor `gitlab`**, with `KAIZERO_FORGE`
   unset — an unsupported forge, refused by name.
 
-A single-repository run — the Todo List lives inside the repository it changes, so it can never
+A single-repository run — the Todo list lives inside the repository it changes, so it can never
 resolve to MR mode regardless of origin, and needs `--local-merge` even when `origin` qualifies:
 
 ```sh
@@ -513,7 +513,7 @@ KAIZERO_WATCHDOG=45m kaizero todo.md
 KAIZERO_QUOTA_RETRY=30m kaizero todo.md
 ```
 
-**`KAIZERO_DEPENDENCY_WAIT`** — ceiling on the wait after a claude session walks the whole Todo List and claims nothing because every unchecked Task is dependency-blocked (step 2.a's independence judgment). Default `10m`; same grammar as `KAIZERO_WATCHDOG` (`900`, `90s`, `15m`, `1h`), and `0` relaunches claude immediately every cycle. Without it, a fully dependency-blocked list looks identical to a genuinely stuck one: a session launches, finds every remaining Task blocked, ends its turn, `RESTART_WAIT` ticks down, another launches — same judgment, same nothing-claimed outcome, one claude session burned per cycle for zero possible progress. The session marks the block on its way out; the shell then waits, comparing a deterministic signature (the Todo List blob's SHA plus the sorted set of ids peers currently hold) instead of relaunching, and stops waiting the instant a peer merges the blocking Task or its holder dies — or after this ceiling, whichever comes first, so a session always gets a chance to re-judge the list fresh.
+**`KAIZERO_DEPENDENCY_WAIT`** — ceiling on the wait after a claude session walks the whole Todo list and claims nothing because every unchecked Task is dependency-blocked (step 2.a's independence judgment). Default `10m`; same grammar as `KAIZERO_WATCHDOG` (`900`, `90s`, `15m`, `1h`), and `0` relaunches claude immediately every cycle. Without it, a fully dependency-blocked list looks identical to a genuinely stuck one: a session launches, finds every remaining Task blocked, ends its turn, `RESTART_WAIT` ticks down, another launches — same judgment, same nothing-claimed outcome, one claude session burned per cycle for zero possible progress. The session marks the block on its way out; the shell then waits, comparing a deterministic signature (the Todo list blob's SHA plus the sorted set of ids peers currently hold) instead of relaunching, and stops waiting the instant a peer merges the blocking Task or its holder dies — or after this ceiling, whichever comes first, so a session always gets a chance to re-judge the list fresh.
 
 ```sh
 KAIZERO_DEPENDENCY_WAIT=20m kaizero todo.md
@@ -531,13 +531,13 @@ KAIZERO_PROGRESS_DELAY=0 kaizero todo.md
 KAIZERO_LINK=tasks kaizero todo.md
 ```
 
-**`KAIZERO_TASK_ID_PATTERN`** — extended regex a Task's first token must match to count as an id, enforced at step 1 against the Todo List's current version. Default `^[A-Za-z0-9._/-]*[0-9][A-Za-z0-9._/-]*$` — matches `SMTH-855`, `7`, `7.a`, `TASK-030`; rejects a line that starts straight into prose, whose first word would otherwise become a branch name. Set `.` to disable the shape check entirely and keep only the no-token case, for an id scheme with no digit in it. A first token shaped as a markdown link (e.g. `[SMTH-855](tasks/...)`) has its bracketed text unwrapped before the pattern check runs, so the pattern is checked against the label, never the whole bracketed token.
+**`KAIZERO_TASK_ID_PATTERN`** — extended regex a Task's first token must match to count as an id, enforced at step 1 against the Todo list's current version. Default `^[A-Za-z0-9._/-]*[0-9][A-Za-z0-9._/-]*$` — matches `SMTH-855`, `7`, `7.a`, `TASK-030`; rejects a line that starts straight into prose, whose first word would otherwise become a branch name. Set `.` to disable the shape check entirely and keep only the no-token case, for an id scheme with no digit in it. A first token shaped as a markdown link (e.g. `[SMTH-855](tasks/...)`) has its bracketed text unwrapped before the pattern check runs, so the pattern is checked against the label, never the whole bracketed token.
 
 ```sh
 KAIZERO_TASK_ID_PATTERN='^[A-Za-z]+$' kaizero todo.md
 ```
 
-**`KAIZERO_ID_HISTORY`** — `1` (default) also walks every historical version of the Todo List for an id that collided or was reused for an unrelated Task, ambiguity that stays invisible to the current file alone but permanently muddies which Task a past commit implemented. `0` checks only the current version, for an operator who has read the historical findings and decided to live with them.
+**`KAIZERO_ID_HISTORY`** — `1` (default) also walks every historical version of the Todo list for an id that collided or was reused for an unrelated Task, ambiguity that stays invisible to the current file alone but permanently muddies which Task a past commit implemented. `0` checks only the current version, for an operator who has read the historical findings and decided to live with them.
 
 ```sh
 KAIZERO_ID_HISTORY=0 kaizero todo.md
@@ -560,13 +560,13 @@ often a network-outage wait re-probes origin. Same grammar; default `5m`.
 KAIZERO_REVIEW_WAIT=2h KAIZERO_REVIEW_POLL=5m kaizero ../acme-planning/todo.md
 ```
 
-**`--always-on`** — park instead of exiting once every Task on the Release Todo List has Landed,
+**`--always-on`** — park instead of exiting once every Task on the Release Todo list has Landed,
 in either mode, no `claude` running while parked. Resumes the moment a new commit adds an
 unchecked Task — every fleet peer shares the coordination repository's `.git`, so a landed
 commit is visible instantly, no fetch needed. Saving `todo.md` is not enough: the park reads
 the coordination base the same way every other check in this script does, so an appended Task
 must be **committed** there before a parked run notices it. `KAIZERO_MAX_LOOPS` still applies
-under `--always-on`, whether or not the Release Todo List happens to be empty when it's reached.
+under `--always-on`, whether or not the Release Todo list happens to be empty when it's reached.
 Opt-in; without the flag a fully Landed list still exits as before.
 
 ```sh
