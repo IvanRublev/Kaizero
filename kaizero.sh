@@ -7,7 +7,7 @@
 # Run -h for usage.
 set -euo pipefail
 
-VERSION="0.1.8"
+VERSION="0.1.9"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
 # per-machine state (lifetime landed-Task count, hidden-invitation choice): outside any repository
 # and outside the install location, so a reinstall or upgrade leaves it alone. Also baked into zero.sh.
