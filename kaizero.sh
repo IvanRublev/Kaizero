@@ -718,7 +718,42 @@ mr_network_and_auth_ok() {
 # `decide_origin` owns the origin decision and its refusals for both paths. `--doctor --local-merge`
 # stops at the generic checks and reads no origin, the diagnostic counterpart of a launch's own
 # --local-merge.
+# doctor_blocked_branches TODO: every `[🚧]` box of the Release Todo List TODO on the current branch
+# of the repository the doctor runs in must still have its Task branch — the work park kept for the
+# session that reclaims it (`<base>-task-<id>`, or the target repository's `<id>-<slug>`). A box
+# whose branch is gone is named; returns 1 then. Silent and 0 outside a repository, on a detached
+# HEAD, or when TODO is not on the branch.
+doctor_blocked_branches() {
+  local todo=$1 root base id n ref found bad=0
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+  base=$(git -C "$root" symbolic-ref -q --short HEAD) || return 0
+  case "$todo" in "$root"/*) todo=${todo#"$root"/} ;; esac
+  git -C "$root" cat-file -e "$base:$todo" 2>/dev/null || return 0
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    n=$(printf '%s' "$id" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-')
+    found=0
+    while IFS= read -r ref; do
+      case "$ref" in "$base-task-$n"|"$n"|"$n"-*) found=1 ;; esac
+    done < <(git -C "$root" for-each-ref --format='%(refname:short)' refs/heads/)
+    if [ "$found" = 0 ]; then
+      echo "$PROG: Task $id is blocked ([🚧]) in $todo but its Task branch '$base-task-$n' is missing — the work park kept is gone; clear the box to [ ] to start the Task again" >&2
+      bad=1
+    fi
+  done < <(git -C "$root" show "$base:$todo" | awk '
+    function unwraplink(s) {
+      if (s ~ /^\[[^]]+\]\([^)]+\)$/) { sub(/^\[/, "", s); sub(/\]\(.*$/, "", s) }
+      return s
+    }
+    /^[ \t]*```/ { fence = !fence; next }
+    fence        { next }
+    /^[ \t]*- \[🚧\]/ { line = $0; sub(/^[ \t]*- \[🚧\][ \t]*/, "", line); split(line, a, /[ \t]/); print unwraplink(a[1]) }')
+  return "$bad"
+}
+
 if [ "${1:-}" = --doctor ]; then
+  DOCTOR_TODO=todo.md
+  for _a in "${@:2}"; do case "$_a" in --local-merge) ;; *) DOCTOR_TODO=$_a ;; esac; done
   run_doctor
   if [ "${2:-}" != --local-merge ]; then
     git rev-parse --git-dir >/dev/null 2>&1 || { echo "$PROG: Not a git repository — run from inside the repo you want zeroed." >&2; exit 1; }
@@ -738,6 +773,7 @@ if [ "${1:-}" = --doctor ]; then
     decide_origin "$TARGET_ROOT" || exit 1
     run_doctor mr
   fi
+  doctor_blocked_branches "$DOCTOR_TODO" || exit 1
   echo "$PROG: All prerequisites OK."
   exit 0
 fi
@@ -779,6 +815,7 @@ TERMED=0                  # set by the TERM trap; makes the closer exit 143 inst
 HUPPED=0                  # set by the HUP trap; makes the closer exit 129 instead of 0 (BUG-047:
                            # the network wait can now run for hours, so a terminal hangup ending
                            # it must still reach the same closer, not bash's default HUP kill)
+BLOCKED_END=0             # set when the run ends because only a human can clear the `[🚧]` boxes left
 IDFAIL=0                  # set when `zero.sh validate-ids` refuses; makes the closer exit 2
 NET_FLAP_STREAK=0         # BUG-047: consecutive passes whose pre-launch guard met an outage before
                            # proceeding — widens the between-session restart gap below every pass it
@@ -786,6 +823,7 @@ NET_FLAP_STREAK=0         # BUG-047: consecutive passes whose pre-launch guard m
                            # cannot relaunch a session at RESTART_WAIT's flat cadence forever
 TODOS_BASE=$(read_counter "${TODOS_TIME_FILE:-}")   # snapshot: report only THIS run's slice of the shared aggregates
 TODOS_DONE_BASE=$(read_counter "${TODOS_DONE_FILE:-}")
+TODOS_BLOCKED_BASE=$(read_counter "${TODOS_BLOCKED_FILE:-}")
 LOOP_START=$(date +%s)   # script loop (outer while loop) starts here
 
 # Ctrl+C during the between-runs sleep (cooked mode) requests a clean stop; the loop breaks to the
@@ -936,7 +974,9 @@ while true; do
     wfc_rc=0; wait_for_claimable || wfc_rc=$?   # guarded: a bare nonzero-returning statement
     if [ "$wfc_rc" = 1 ]; then break; fi        # trips set -e before wfc_rc=$? is ever reached
     if [ "$wfc_rc" = 2 ]; then continue; fi   # nothing unchecked: re-judge from the loop's top
-    if ! wait_for_dependency_clear; then break; fi
+    wfd_rc=0; wait_for_dependency_clear || wfd_rc=$?
+    if [ "$wfd_rc" = 1 ]; then break; fi
+    if [ "$wfd_rc" = 2 ]; then BLOCKED_END=1; break; fi
     # first prompt submitted straight from the CLI arg. The session Stop hook SIGTERMs claude
     # when context fills; exit 143 is the normal restart path, so swallow it.
     CLAUDE_ARGS=(--settings "$STOP_SETTINGS" --permission-mode auto --name "$SESSION_NAME")
@@ -1108,8 +1148,11 @@ done
 if [ "$TERMED" = 1 ]; then exit_reason_line 95; fi
 credit_inflight_time
 print_report "$(date +%s)"
+# the box report belongs to a run that ran out of Tasks to claim: no `[ ]` left (or the blocked end)
+if [ "$BLOCKED_END" = 1 ]; then box_report open
+elif [ "$(unchecked_todos)" -eq 0 ]; then box_report; fi
 print_fleet_total
-if all_todos_done; then dojo_proud; fi
+if all_boxes_landed; then dojo_proud; fi
 reap_dead_sessions   # no future acquire will reap this session's marker
 # 128+15: a supervisor can tell "terminated" from "finished". As an `if` — `[ … ] && exit 143`
 # would leak the test's own status 1 through `set -e` on every normal run.
@@ -1529,6 +1572,7 @@ write_prepare_commit_msg_hook "$TARGET_ROOT"
 SESSION_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd)/session"   # matches zero.sh's marker dir
 TODOS_TIME_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/todos-seconds-${COORD_BASE//\//-}-$INSTANCE_ID"   # this instance's file (matches zero.sh's todos_file)
 TODOS_DONE_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/todos-done-${COORD_BASE//\//-}-$INSTANCE_ID"      # count of todos this instance merged (matches zero.sh's todos_done_file)
+TODOS_BLOCKED_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/todos-blocked-${COORD_BASE//\//-}-$INSTANCE_ID" # count of todos this instance parked as blocked (matches zero.sh's todos_blocked_file)
 # this instance's list of claude session transcripts (one path per line, appended by the Stop hook).
 # Namespaced like the time-file so parallel instances never read each other's token figures.
 TRANSCRIPTS_FILE="$(cd "$(git rev-parse --git-common-dir)" && pwd)/transcripts-${COORD_BASE//\//-}-$INSTANCE_ID"
@@ -2256,6 +2300,59 @@ unchecked_todos() {
     END { print n+0 }'
 }
 
+# every Task's box on the base branch, grouped for the closing report: prints nothing when every
+# box is `[x]` (or there is none); otherwise a `Task boxes:` block counting and naming the Tasks of
+# each box apart — Landed `[x]`, blocked `[🚧]`, `[?]`, any other symbol, and with $1 = open also
+# the unclaimed `[ ]` ones. Fence-aware and link-id aware like every reader of the list.
+box_report() {
+  git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" 2>/dev/null | awk -v want_open="${1:-}" '
+    function unwraplink(s) {
+      if (s ~ /^\[[^]]+\]\([^)]+\)$/) { sub(/^\[/, "", s); sub(/\]\(.*$/, "", s) }
+      return s
+    }
+    function add(g, id) { n[g]++; ids[g] = ids[g] " " id }
+    function show(label, g) { if (n[g]) printf "  %s: %d ·%s\n", label, n[g], ids[g] }
+    /^[ \t]*```/ { fence = !fence; next }
+    fence        { next }
+    /^[ \t]*- \[[^]]+\]/ {
+      line = $0; sub(/^[ \t]*- \[/, "", line)
+      match(line, /^[^]]+\]/)
+      box = substr(line, 1, RLENGTH - 1)
+      line = substr(line, RLENGTH + 1); sub(/^[ \t]*/, "", line)
+      split(line, a, /[ \t]/); id = unwraplink(a[1])
+      if (box == "x") add("x", id)
+      else if (box == "🚧") add("b", id)
+      else if (box == "?") add("r", id)
+      else if (box == " ") add("o", id)
+      else add("z", id " [" box "]")
+    }
+    END {
+      if (!(n["b"] || n["r"] || n["z"] || (want_open == "open" && n["o"]))) exit
+      print "Task boxes:"
+      show("Landed [x]", "x"); show("Blocked [🚧]", "b"); show("Branches review needed [?]", "r")
+      show("Other symbols", "z")
+      if (want_open == "open") show("Unclaimed [ ]", "o")
+    }'
+}
+
+# is every box on the base branch `[x]`? (at least one box) — the only state the run's closing cheer is for.
+all_boxes_landed() {
+  git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" 2>/dev/null | awk '
+    /^[ \t]*```/ { fence = !fence; next }
+    fence        { next }
+    /^[ \t]*- \[[^]]+\]/ { any = 1; if ($0 !~ /^[ \t]*- \[x\]/) other = 1 }
+    END { exit (any && !other) ? 0 : 1 }'
+}
+
+# count Tasks whose box holds `🚧` (blocked) on the base branch's Release Todo List.
+blocked_todos() {
+  git -C "$COORD_ROOT" show "$COORD_BASE:$TODO_PATH" 2>/dev/null | awk '
+    /^[ \t]*```/       { fence = !fence; next }
+    fence              { next }
+    /^[ \t]*- \[🚧\]/   { n++ }
+    END { print n+0 }'
+}
+
 # count Tasks whose box holds `↑` (an open MR-mode request) on the base branch's Release Todo List. Unlike its
 # neighbour above, names $COORD_ROOT explicitly rather than relying on the caller's cwd being
 # there — its callers (the always-on park wait, and the MR-mode half-application refusal, which
@@ -2504,7 +2601,8 @@ wait_for_new_task() {
 # found the unheld remainder genuinely blocked, so relaunching immediately would spend a fresh
 # claude session on the same judgment. wait_for_claimable's `u <= h` means "everything is
 # peer-held"; this means "u > h, yet nothing was claimable" — a distinct reason to wait, so it
-# gets a distinct line. 0 = launch claude; 1 = break to the closer (Ctrl+C/SIGTERM).
+# gets a distinct line. 0 = launch claude; 1 = break to the closer (Ctrl+C/SIGTERM); 2 = break to
+# the closer because only a human can clear what is left (a `[🚧]` box, nobody holding a Task).
 #
 # MR mode (active): three behaviours layer on top, one flag gating all three — its ceiling
 # becomes KAIZERO_REVIEW_WAIT (a reviewer, not a peer, is what it now waits for; may be
@@ -2523,14 +2621,19 @@ wait_for_dependency_clear() {
   # marker" — i.e. launch — even though the block it recorded never cleared.
   if [ -f "$marker" ]; then stored=$(cat "$marker" 2>/dev/null || true); rm -f "$marker"; fi
   [ -n "$stored" ] || return 0                              # no marker: normal launch, no new poll
+  live=$("$ZERO_SH" no-claim-signature 2>/dev/null || true)
+  [ "$live" = "$stored" ] || return 0                        # already stale: normal launch
+  # nobody holds a Task, no request is open, a box is `[🚧]`: the wait below could only be cleared
+  # by a human, so the run ends instead and the closing report names what is left.
+  if [ "$active" != 1 ] && [ "$(held_todos)" -eq 0 ] && [ "$(open_requests)" -eq 0 ] && [ "$(blocked_todos)" -ge 1 ]; then
+    return 2
+  fi
   if [ "$active" = 1 ]; then
     ceiling="$REVIEW_WAIT_SECS"                             # empty (unbounded) or a positive count
   else
     [ "$DEPENDENCY_WAIT_SECS" -gt 0 ] || return 0            # 0 = always relaunch immediately
     ceiling="$DEPENDENCY_WAIT_SECS"
   fi
-  live=$("$ZERO_SH" no-claim-signature 2>/dev/null || true)
-  [ "$live" = "$stored" ] || return 0                        # already stale: normal launch
   start=$(date +%s); poll_last=$start
   while true; do
     if [ "$STOP" = 1 ]; then return 1; fi
@@ -2616,17 +2719,19 @@ tasks_verb()  { [ "${MR_MODE:-0}" = 1 ] && printf 'handed off' || printf 'landed
 #   Tokens      = this instance's claude token usage, own block (not a duration, so it does not
 #                 share the timing rows' label column)
 print_report() {
-  local id="${INSTANCE_ID:-?}" nick="${INSTANCE_NICK:-?}" dur count lline paren
+  local id="${INSTANCE_ID:-?}" nick="${INSTANCE_NICK:-?}" dur count lline paren blk bplain="" bcol=""
   dur="$(fmt_dur $(( $(read_counter "${TODOS_TIME_FILE:-}") - TODOS_BASE )))"
   count="$(( $(read_counter "${TODOS_DONE_FILE:-}") - TODOS_DONE_BASE ))"
+  blk="$(( $(read_counter "${TODOS_BLOCKED_FILE:-}") - TODOS_BLOCKED_BASE ))"
+  if [ "$blk" -gt 0 ]; then bplain="  $DOT  $blk blocked"; bcol="  $(c "$C_DIM" "$DOT")  $(c "$C_WHITE" "$blk blocked")"; fi
   lline="$(fmt_dur $(( $1 - LOOP_START )))"
   paren="(instance $id $DOT $nick)"
   printf '\n'
   box_top "$C_DIM"
   box_line "$C_DIM" "Execution stats $(c "${C_BOLD}${C_BWHITE}" "$paren")" "Execution stats $paren"
   box_line "$C_DIM" \
-    "$(c "$C_DIM" "$(printf '%-20s' 'Tasks:')") $(c "$C_WHITE" "$dur")  $(c "$C_DIM" "$DOT")  $(c "$C_WHITE" "$count") $(c "$C_WHITE" "$(tasks_label)")" \
-    "$(printf '%-20s' 'Tasks:') $dur  $DOT  $count $(tasks_label)"
+    "$(c "$C_DIM" "$(printf '%-20s' 'Tasks:')") $(c "$C_WHITE" "$dur")  $(c "$C_DIM" "$DOT")  $(c "$C_WHITE" "$count") $(c "$C_WHITE" "$(tasks_label)")$bcol" \
+    "$(printf '%-20s' 'Tasks:') $dur  $DOT  $count $(tasks_label)$bplain"
   box_line "$C_DIM" \
     "$(c "$C_DIM" "$(printf '%-20s' 'Kaizero run loop:')") $(c "$C_WHITE" "$lline")" \
     "$(printf '%-20s' 'Kaizero run loop:') $lline"
@@ -2690,11 +2795,11 @@ print_interview_invite() {
 # `Kaizero run loop:` is omitted — instances' wall times overlap, so their sum is not a duration
 # anything took.
 print_fleet_total() {
-  local gc slug pre f id ids="" n=0 secs=0 done_n=0 t any=0 ti=0 to=0 tcc=0 tcr=0 tt=0 plural=s
+  local gc slug pre f id ids="" n=0 secs=0 done_n=0 blk_n=0 bplain="" bcol="" t any=0 ti=0 to=0 tcc=0 tcr=0 tt=0 plural=s
   gc="$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd)" || return 0
   [ -n "$gc" ] || return 0
   slug="${COORD_BASE//\//-}"
-  for pre in todos-seconds todos-done transcripts; do    # union: an instance that merged nothing
+  for pre in todos-seconds todos-done todos-blocked transcripts; do    # union: an instance that merged nothing
     for f in "$gc/$pre-$slug-"*; do                      # writes no todos-done file, but has tokens
       [ -e "$f" ] || continue
       case "$f" in *.lock|*.tmp) continue;; esac
@@ -2708,18 +2813,20 @@ print_fleet_total() {
   for id in $ids; do
     secs=$((   secs   + $(read_counter "$gc/todos-seconds-$slug-$id") ))
     done_n=$(( done_n + $(read_counter "$gc/todos-done-$slug-$id") ))
+    blk_n=$(( blk_n + $(read_counter "$gc/todos-blocked-$slug-$id") ))
     t="$(read_tokens_total "$gc/transcripts-$slug-$id" || true)"
     # shellcheck disable=SC2086  # deliberate split: awk emits five space-separated integers
     set -- $t
     if [ "$#" -eq 5 ]; then any=1; ti=$((ti+$1)); to=$((to+$2)); tcc=$((tcc+$3)); tcr=$((tcr+$4)); tt=$((tt+$5)); fi
   done
   print_interview_invite
+  if [ "$blk_n" -gt 0 ]; then bplain="  $DOT  $blk_n blocked"; bcol="  $(c "$C_DIM" "$DOT")  $(c "$C_WHITE" "$blk_n blocked")"; fi
   printf '\n'
   box_top "$C_GOLD"
   box_line "$C_GOLD" "$(c "$C_BOLD" "TOTAL ($n instance$plural)")" "TOTAL ($n instance$plural)"
   box_line "$C_GOLD" \
-    "$(c "$C_DIM" "$(printf '%-20s' 'Tasks:')") $(c "$C_WHITE" "$(fmt_dur "$secs")")  $(c "$C_DIM" "$DOT")  $(c "$C_WHITE" "$done_n") $(c "$C_WHITE" "$(tasks_label)")" \
-    "$(printf '%-20s' 'Tasks:') $(fmt_dur "$secs")  $DOT  $done_n $(tasks_label)"
+    "$(c "$C_DIM" "$(printf '%-20s' 'Tasks:')") $(c "$C_WHITE" "$(fmt_dur "$secs")")  $(c "$C_DIM" "$DOT")  $(c "$C_WHITE" "$done_n") $(c "$C_WHITE" "$(tasks_label)")$bcol" \
+    "$(printf '%-20s' 'Tasks:') $(fmt_dur "$secs")  $DOT  $done_n $(tasks_label)$bplain"
   box_line "$C_GOLD" "" ""
   if [ "$any" = 1 ]; then
     box_line "$C_GOLD" "$(c "$C_WHITE" "Tokens: $(fmt_tok "$tt") Total")" "Tokens: $(fmt_tok "$tt") Total"
@@ -3262,6 +3369,9 @@ todos_file() { printf '%s/todos-seconds-%s-%s' "$COORD_GITDIR" "${COORD_BASE//\/
 # same namespacing for the count of todos instance $1 landed on the base branch.
 todos_done_file() { printf '%s/todos-done-%s-%s' "$COORD_GITDIR" "${COORD_BASE//\//-}" "$1"; }
 
+# same namespacing for the count of todos instance $1 parked as blocked.
+todos_blocked_file() { printf '%s/todos-blocked-%s-%s' "$COORD_GITDIR" "${COORD_BASE//\//-}" "$1"; }
+
 # stat mtime-epoch flavor, probed once: GNU/Linux `-c %Y` vs BSD/macOS `-f %m`. GNU first: GNU's
 # own -f means filesystem-status and succeeds regardless of the bogus %m, so a BSD-first probe
 # always "succeeds" and picks the wrong flavor on Linux.
@@ -3291,6 +3401,13 @@ add_todos_done() {
   [ -n "$inst" ] || inst=shared
   add_counter 1 "$(todos_done_file "$inst")"
   add_machine_landed
+}
+# +1 to instance $1's blocked-Task count — park's own credit, beside add_todos_time's seconds;
+# it touches neither the Landed count nor the per-machine lifetime landed count.
+add_todos_blocked() {
+  local inst=${1:-}
+  [ -n "$inst" ] || inst=shared
+  add_counter 1 "$(todos_blocked_file "$inst")"
 }
 # +1 to the per-machine lifetime landed count (the feedback invitation reads it). Fail-open: an
 # unwritable state location costs the count, never the landing — silent, in a subshell, status ignored.
@@ -3582,7 +3699,18 @@ sync_mrs() {
     [ -n "$id" ] || continue
     cur=$(box_symbol_on_base "$id") || cur=""
     [ "$cur" = "↑" ] || continue
-    tick_box "$id" "$sym" retick >/dev/null
+    TICK_ALSO=""
+    if [ "$sym" = '?' ]; then
+      case "$kind" in
+        no-branch)        reason="no local branch for the id" ;;
+        two-branch)       reason="two local branches for the id" ;;
+        no-request)       reason="no request for branch $branch2" ;;
+        merged-elsewhere) reason="request $url merged into ${base:-a base this run does not know}, not $TARGET_BASE" ;;
+        *)                reason="$kind" ;;
+      esac
+      review_note "$id" "$reason"
+    fi
+    tick_box "$id" "$sym" retick >/dev/null; TICK_ALSO=""
 
     case "$kind" in
       no-branch)
@@ -4195,6 +4323,12 @@ claim_task() {
     echo "claim $raw: not claimed — this session already owns $cur; release or land it before claiming another" >&2
     return 1
   fi
+  # a blocked Task keeps its branch until a human clears the box — nothing to acquire, nothing to
+  # release (release would tear the kept branch's worktree down for nothing).
+  if [ "$(box_symbol_on_base "$raw" 2>/dev/null || true)" = "🚧" ]; then
+    echo "claim $raw: not claimed — blocked ([🚧]); a human clears the box to [ ] to reopen it" >&2
+    return 1
+  fi
   # re-proves what the launcher's own pre-launch checks only ever prove once (TASK-054): a human
   # editing todo.md mid-session, or a Task file breaking mid-session, must not go undetected until
   # the next `claude` launch. validate_ids stays whole-tail, exactly like the standalone
@@ -4386,7 +4520,8 @@ quiet_checkout() {
 # must already be checked out on $COORD_BASE) and commits it alone. Idempotent — an already-landed
 # line is left untouched and nothing is committed, UNLESS the third argument is exactly `retick`,
 # in which case a landed box is rewritten too (sync_mrs). Echoes missing/checked/unchecked;
-# 'missing' is the caller's to fail on.
+# 'missing' is the caller's to fail on. TICK_ALSO, when set, names one more file (a Task file
+# review_note just edited) that the same commit carries with the box.
 tick_box() {
   local raw=$1 sym=$2 retick=${3:-} state nonl tmp mode commit_out commit_rc
   state=$(awk -v id="$raw" '
@@ -4443,8 +4578,8 @@ tick_box() {
       # by the operator (merge_two_repos' coordination checkout allows it — quiet_checkout's todo
       # mode only demands $TODO_PATH itself be clean) stays staged and uncommitted — the index is
       # never swept whole into this commit.
-      if git -C "$COORD_ROOT" add "$TODO_PATH"; then
-        commit_out=$(git -C "$COORD_ROOT" commit -q -m "zero $raw" -- "$TODO_PATH" 2>&1); commit_rc=$?
+      if git -C "$COORD_ROOT" add "$TODO_PATH" ${TICK_ALSO:+"$TICK_ALSO"}; then
+        commit_out=$(git -C "$COORD_ROOT" commit -q -m "zero $raw" -- "$TODO_PATH" ${TICK_ALSO:+"$TICK_ALSO"} 2>&1); commit_rc=$?
       else
         commit_out="git add failed"; commit_rc=1
       fi
@@ -4455,8 +4590,8 @@ tick_box() {
         # runs this whole function in a SUBSHELL, so a plain global assignment here never reaches
         # the caller's shell. A file does: written here, read back by the caller after the
         # substitution returns, to quote in its own exit-5 line.
-        git -C "$COORD_ROOT" reset -q -- "$TODO_PATH" 2>/dev/null
-        git -C "$COORD_ROOT" checkout -q HEAD -- "$TODO_PATH" 2>/dev/null
+        git -C "$COORD_ROOT" reset -q -- "$TODO_PATH" ${TICK_ALSO:+"$TICK_ALSO"} 2>/dev/null
+        git -C "$COORD_ROOT" checkout -q HEAD -- "$TODO_PATH" ${TICK_ALSO:+"$TICK_ALSO"} 2>/dev/null
         state=failed
         printf '%s' "${commit_out:-a repository hook rejected the commit with no output}" > "$TICK_FAIL_FILE"
       fi ;;
@@ -4494,7 +4629,7 @@ tick_box() {
         if [ "$nonl" = 1 ]; then printf '%s' "$(cat "$tmp")" > "$tmp.2" && mv "$tmp.2" "$tmp"; fi
         chmod "$mode" "$tmp"
         mv "$tmp" "$TODO_ABS"
-        git -C "$COORD_ROOT" add "$TODO_PATH" && git -C "$COORD_ROOT" commit -q -m "zero sync $raw"
+        git -C "$COORD_ROOT" add "$TODO_PATH" ${TICK_ALSO:+"$TICK_ALSO"} && git -C "$COORD_ROOT" commit -q -m "zero sync $raw"
       fi ;;
   esac
   printf '%s' "$state"
@@ -4976,6 +5111,46 @@ ac_section_bounds() {
   ' "$1"
 }
 
+# append_ac_note <task_file> <line>: adds <line> at the end of the Acceptance criteria section —
+# after the section's last non-blank line, behind a blank line unless that line is itself a quote
+# line (the gate-note block). Rewrites in place (cat >, so mode and inode stay). Fails, writing
+# nothing, when the file has no recognized Acceptance criteria section.
+append_ac_note() {
+  local bounds s e tmp
+  bounds=$(ac_section_bounds "$1")
+  [ -n "$bounds" ] || return 1
+  read -r s e <<< "$bounds"
+  tmp="$1.note.$$"
+  awk -v s="$s" -v e="$e" -v note="$2" '
+    { lines[NR] = $0 }
+    END {
+      last = s - 1
+      for (i = s; i <= e; i++) if (lines[i] !~ /^[ \t]*$/) last = i
+      for (i = 1; i <= NR; i++) {
+        print lines[i]
+        if (i == last) {
+          if (last >= s && lines[last] !~ /^[ \t]*>/) print ""
+          print note
+        }
+      }
+    }
+  ' "$1" > "$tmp" && cat "$tmp" > "$1"
+  rm -f "$tmp"
+}
+
+# review_note <raw_id> <cause>: the `> Branches review needed` line for a box about to be written
+# `[?]` — the timestamp comes from the shell clock here, never from a session. Appended to the
+# Task file in $COORD_ROOT and left for tick_box to commit with the box (TICK_ALSO is set to the
+# file's path; empty when the id has no usable Task file or section, the box is written anyway).
+review_note() {
+  local raw=$1 cause=$2 tid tcls trest
+  TICK_ALSO=""
+  IFS=$'\t' read -r tid tcls trest < <(printf '%s\n' "$raw" | resolve_task_ids)
+  [ "$tcls" = ok ] || return 0
+  append_ac_note "$trest" "> Branches review needed $(date "+%Y-%m-%d %H:%M%z") $cause" && TICK_ALSO=$trest
+  return 0
+}
+
 # ac_land_gate_findings <task_file>: TASK-058f's land-gate check. Uses ac_section_bounds to find
 # the Acceptance Criteria section, then within it: prints one `MISSING_GATE<TAB>name` line for
 # each of TASK-056's two gate notes not found anywhere in the section (position/interleaving with
@@ -5081,8 +5256,7 @@ task_gate_file() {
 # only writer of the box,
 # so there is no "your branch checked the wrong box" case to gate or self-heal here.
 # <symbol> (default x) is exactly one glyph, which may be several bytes, not a space and not `]`;
-# what it MEANS is the session's business, not zero.sh's — `?` = "landed, needs human review" is
-# the convention README names.
+# what it MEANS is the operator's instructions' business, not zero.sh's.
 merge_task() {
   local raw=$1 twt=$2 sym=${3:-x} n branch wt acq inst fork rc o_pid o_start acf ac_findings acline
   n=$(sanitize_id "$raw"); branch=$(task_branch "$n")
@@ -5137,6 +5311,113 @@ merge_task() {
   if [ "$rc" -eq 0 ] && [ "$MERGE_ALREADY_LANDED" != 1 ]; then add_todos_done "$inst"; fi
   if [ "$rc" -eq 0 ]; then mark_safe_to_exit; fi
   return $rc
+}
+
+# park <raw_id>: the session found its claimed Task impossible to implement for an outside cause
+# and recorded that as a `> Blocked` line at the end of the Task file's Acceptance criteria
+# section. Under the same session-ownership checks and serialization as merge: commits the
+# worktree's work in progress to the Task branch, commits the Blocked line to the base through
+# commit_ac_checkoff, writes `[🚧]` to the Task's box, removes the worktree(s), keeps the Task
+# branch(es) under their own names and clears the session's current Task. No land gate, no merge
+# into the base, no push, no request; the elapsed time is credited as merge credits it, the Landed
+# count is not. A human clears the box to `[ ]` to reopen the Task — the next claim reattaches the
+# kept branch.
+# exit 0 = parked (a retry after a partial park finishes it); exit 5 = refused (no Blocked line, no
+# worktree, a worktree off its branch, a box that is neither `[ ]` nor `[🚧]`, a rejected commit)
+# — nothing torn down; exit 6 = a peer holds the Task; exit 9 = this session never claimed raw_id.
+park_task() {
+  local raw=$1 n branch wt twt acq inst o_pid o_start tbr acf bounds s e state cur
+  local reason wt_rc=0
+  n=$(sanitize_id "$raw"); branch=$(task_branch "$n")
+  wt=$(wt_for_branch "$branch")
+  acq=""; inst=""; o_pid=""; o_start=""; twt=""
+  if [ -n "$wt" ] && [ -f "$wt/.owner" ]; then { read -r o_pid; read -r o_start; read -r acq; read -r inst; read -r twt || true; } < "$wt/.owner" 2>/dev/null || acq=""; fi
+  if [ "$(session_current "$OWNER_PID")" != "$n" ]; then
+    echo "park $raw: not claimed by this session — run 'zero.sh claim $raw' first" >&2
+    return 9
+  fi
+  if [ -n "$o_pid" ] && { [ "$o_pid" != "$OWNER_PID" ] || [ "$o_start" != "$OWN_START" ]; }; then
+    echo "park $raw: not your task — instance ${inst:-another session} holds it" >&2
+    return 6
+  fi
+  if [ -z "$wt" ] || [ ! -d "$wt" ]; then
+    echo "park $raw: $branch has no worktree to hand back" >&2
+    return 5
+  fi
+  [ -n "$twt" ] || twt=$wt
+
+  # the Blocked line is the session's decision on record; without it there is nothing to park on.
+  acf=$(task_gate_file "$raw") || acf=""
+  bounds=""; [ -z "$acf" ] || bounds=$(ac_section_bounds "$acf")
+  if [ -n "$bounds" ]; then read -r s e <<< "$bounds"; fi
+  if [ -z "$bounds" ] || ! sed -n "${s},${e}p" "$acf" | grep -Eq '^>[[:space:]]*Blocked([[:space:]]|$)'; then
+    echo "park $raw: no '> Blocked' line at the end of the Acceptance criteria section of ${acf:-the Task file} — write it first" >&2
+    return 5
+  fi
+
+  # work in progress goes onto the Task branch before anything is removed, so removal loses nothing.
+  tbr=$(git -C "$twt" symbolic-ref --short -q HEAD 2>/dev/null || true)
+  if [ -z "$tbr" ] || { [ "$twt" = "$wt" ] && [ "$tbr" != "$branch" ]; }; then
+    echo "park $raw: land gate failed at local: $twt is on ${tbr:-a detached HEAD}, not the Task branch — check it out first" >&2
+    return 5
+  fi
+  if [ -n "$(git -C "$twt" status --porcelain 2>/dev/null)" ]; then
+    git -C "$twt" add -A >/dev/null 2>&1
+    if ! reason=$(git -C "$twt" commit -q --no-verify -m "park $raw: work in progress" 2>&1); then
+      echo "park $raw: committing the work in progress in $twt failed: $reason" >&2
+      return 5
+    fi
+  fi
+
+  # the Blocked line (and any ticked criteria beside it) reaches the base the way every checkoff does.
+  commit_ac_checkoff "$raw" || return 5
+
+  exec 10>"$MERGE_LOCK"; "$FLOCK_BIN" 10
+  reason=$(quiet_checkout "$COORD_ROOT" todo "$TODO_PATH")
+  if [ -n "$reason" ]; then
+    exec 10>&-
+    echo "park $raw: $COORD_ROOT $reason" >&2
+    return 5
+  fi
+  if ! git -C "$COORD_ROOT" checkout -q "$COORD_BASE" 2>/dev/null; then
+    exec 10>&-
+    echo "park $raw: checkout of $COORD_BASE failed in $COORD_ROOT" >&2
+    return 5
+  fi
+  cur=$(box_symbol_on_base "$raw") || cur=""
+  case "$cur" in
+    " "|"🚧") ;;
+    "") exec 10>&-; echo "park $raw: no checkbox line for $raw in $TODO_PATH on $COORD_BASE" >&2; return 5 ;;
+    *)  exec 10>&-; echo "park $raw: the box of $raw holds [$cur], not [ ] — nothing to hand back" >&2; return 5 ;;
+  esac
+  if [ "$cur" = " " ]; then
+    rm -f "$TICK_FAIL_FILE"
+    TICK_ALSO=""
+    state=$(tick_box "$raw" "🚧")
+    if [ "$state" != unchecked ]; then
+      exec 10>&-
+      echo "park $raw: tick commit for $raw was rejected in $COORD_ROOT: $(cat "$TICK_FAIL_FILE" 2>/dev/null)" >&2
+      return 5
+    fi
+  fi
+
+  # cleanup inside MERGE_LOCK, as merge's: a racing caller never sees the Task half handed back.
+  # The target worktree goes first (its pairing record lives in $wt's .owner), no branch is deleted.
+  if [ "$twt" != "$wt" ]; then remove_worktree "$TARGET_ROOT" "$twt" "park $raw" || wt_rc=$?; fi
+  remove_worktree "$COORD_ROOT" "$wt" "park $raw" || wt_rc=$?
+  exec 10>&-
+  if [ -n "$acq" ]; then add_todos_time "$(( $(date +%s) - acq ))" "$inst"; fi
+  add_todos_blocked "$inst"
+  mark_safe_to_exit
+  if [ "$twt" != "$wt" ]; then branch=$tbr; fi
+  if [ "$wt_rc" -eq 0 ]; then
+    echo "park $raw: blocked as [🚧]; worktree removed, branch $branch kept"
+    session_log "park $raw: blocked as [🚧]; worktree removed, branch $branch kept"
+  else
+    echo "park $raw: blocked as [🚧]; worktree removal incomplete (rc=$wt_rc) — remove it by hand, branch $branch kept"
+    session_log "park $raw: blocked as [🚧]; worktree removal incomplete (rc=$wt_rc) — remove it by hand, branch $branch kept"
+  fi
+  return 0
 }
 
 # mr-body-path <raw_id> -> deterministic scratch path for that Task's request description
@@ -5359,7 +5640,9 @@ mr_task() {
   clear_inflight
 
   rm -f "$TICK_FAIL_FILE"
-  state=$(tick_box "$raw" "$sym")
+  TICK_ALSO=""
+  if [ "$sym" = '?' ]; then review_note "$raw" "request $url merged into ${w_base:-a base this run does not know}, not $TARGET_BASE"; fi
+  state=$(tick_box "$raw" "$sym"); TICK_ALSO=""
   case "$state" in
     missing)
       exec 10>&-
@@ -5560,7 +5843,8 @@ todo_tail() {
 }
 
 # todo_scan: every checkbox line of the Release Todo List on the coordination base, fence-aware,
-# as typed records: `U<id>\t<line>` per unchecked line, `L<id>` per Landed (any non-`[ ]`) line,
+# as typed records: `U<id>\t<line>` per unchecked line, `L<id>` per Landed (`[x]`) line, `B<id>` per
+# blocked (`[🚧]`) line, `O<id> [<box>]` per line with any other box,
 # `C<line>` per leading context line (up to two before the first unchecked box), `P<id>\t<n>` per
 # checkbox line = how many unchecked lines precede the position just after it.
 todo_scan() {
@@ -5574,13 +5858,16 @@ todo_scan() {
     /^[ \t]*- \[[^]]+\]/ {
       t = $0; sub(/^[ \t]*- \[[^]]+\][ \t]*/, "", t)
       split(t, a, /[ \t]+/); id = unwraplink(a[1])
+      bx = $0; sub(/^[ \t]*- \[/, "", bx); sub(/\].*$/, "", bx)
       all[++n] = $0
       if ($0 ~ /^[ \t]*- \[ \]/) {
         if (!cut) cut = n
         printf "U%s\t%s\n", id, $0; u++
         printf "P%s\t%d\n", id, u
       } else {
-        if (id != "") printf "L%s\n", id
+        if (id != "" && bx == "x") printf "L%s\n", id
+        if (id != "" && bx == "🚧") printf "B%s\n", id
+        if (id != "" && bx != "x" && bx != "🚧") printf "O%s\n", id " [" bx "]"
         printf "P%s\t%d\n", id, u
       }
     }
@@ -5617,19 +5904,30 @@ todo_resolve_from() {
 # the resolved list (BUG 078) when it is current, else from live resolution only as far as the
 # page reaches. A held line carries " ⚒️ held by a live peer" behind its id token (BUG 079).
 todo_list() {
-  local cursor="${1-}" rec rest landed=() ctx=() uids=() ulines=() pids=() pstart=() scan
+  local cursor="${1-}" rec rest landed=() blocked=() other=() ctx=() uids=() ulines=() pids=() pstart=() scan
   scan=$(todo_scan) || return $?
   while IFS= read -r rec; do
     rest=${rec:1}
     case "${rec:0:1}" in
       U) uids+=("${rest%%$'\t'*}"); ulines+=("${rest#*$'\t'}") ;;
       L) landed+=("$rest") ;;
+      B) blocked+=("$rest") ;;
+      O) other+=("$rest") ;;
       C) ctx+=("$rest") ;;
       P) pids+=("${rest%%$'\t'*}"); pstart+=("${rest#*$'\t'}") ;;
     esac
   done <<<"$scan"
   local nu=${#ulines[@]}
-  [ "$nu" -gt 0 ] || return 0
+  if [ "$nu" -eq 0 ]; then
+    # no `[ ]` Task is left: silence means every box is `[x]`; any other box is named, so a
+    # session can tell "all Landed" from "nothing left to claim".
+    if [ "${#blocked[@]}" -gt 0 ] || [ "${#other[@]}" -gt 0 ]; then
+      [ "${#landed[@]}" -gt 0 ] && printf 'Landed: %s\n' "${landed[*]}"
+      [ "${#blocked[@]}" -gt 0 ] && printf 'Blocked: %s\n' "${blocked[*]}"
+      [ "${#other[@]}" -gt 0 ] && printf 'Other: %s\n' "${other[*]}"
+    fi
+    return 0
+  fi
 
   local start=0 k
   if [ -n "$cursor" ]; then
@@ -5689,6 +5987,7 @@ todo_list() {
   local line pre tok post
   if [ -z "$cursor" ]; then
     [ "${#landed[@]}" -gt 0 ] && printf 'Landed: %s\n' "${landed[*]}"
+    [ "${#blocked[@]}" -gt 0 ] && printf 'Blocked: %s\n' "${blocked[*]}"
     for line in "${ctx[@]+"${ctx[@]}"}"; do printf '%s\n' "$line"; done
   fi
   for (( k = 0; k < nu; k++ )); do
@@ -6696,6 +6995,7 @@ case "${1:-}" in
   merge)   ensure_owner
            [ "$MR_MODE" = 1 ] && { echo "merge $2: this fleet runs MR mode; land with 'zero.sh mr' instead" >&2; exit 5; }
            merge_task "$2" "$3" "${4:-}" && set_current none || exit $? ;;  # clear only on success
+  park)    ensure_owner; park_task "$2" && set_current none || exit $? ;;       # clear only on success
   mr)      ensure_owner
            [ "$MR_MODE" = 0 ] && { echo "mr $2: this fleet does not run MR mode; land with 'zero.sh merge' instead" >&2; exit 5; }
            mr_task "$2" "$3" && set_current none || exit $? ;;              # clear only on success
@@ -6715,7 +7015,7 @@ case "${1:-}" in
   target-branches-for-id) target_branches_for_id "$2" ;;
   box-symbol-on-base)     box_symbol_on_base "$2" ;;
   sync-mrs)               sync_mrs ;;
-  *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | resolve-tasks | todo-list [ID] | task-file ID | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
+  *) echo "usage: zero.sh {claim N | release N [WT] | merge N WT [symbol] | park N | mr N WT | mr-body-path N | done N [WT] | credit_inflight_time | commit_ac_checkoff N | no-claim-mark | no-claim-signature | validate-ids | validate-tasks | resolve-tasks | todo-list [ID] | task-file ID | unchecked-todos | target-branch ID TITLE | target-branches-for-id ID | box-symbol-on-base ID | sync-mrs}" >&2; exit 64 ;;
 esac
 ZERO_EOF
     } | atomic_put "$gitdir/zero.sh" "" +x
@@ -6744,6 +7044,31 @@ inject_marker() {
     printf -v "$__var" '%s' "$__result"
 }
 
+# the two prompt passages both builders share: the BLOCKED paragraph of step c and the `park` exits
+# of the step that ends the session. Plain text with @@ZERO_SH@@ left for the builder's own marker
+# pass, so the two prompts can never word the decision differently.
+blocked_paragraph() {
+    cat <<'BLOCKED_EOF'
+      BLOCKED — a Task is blocked when no action inside its worktree and the environment this setup
+      starts for it can bring it to Landed: an outside resource, state shared with peers, a missing
+      capability, or a wait on an external condition longer than 5 minutes. Decide it by evidence you
+      observed (an error, a status, a message), after the workarounds your own setup defines. Record
+      the decision as one quote line at the end of the Task file's Acceptance criteria section, with
+      the timestamp taken from the shell clock in the same Bash call that writes the line:
+      > Blocked YYYY-MM-DD HH:MM±HHMM <cause>; evidence: <observed>; unblocks when: <condition>
+      Commit it with `@@ZERO_SH@@ commit_ac_checkoff task_id`, run `@@ZERO_SH@@ park task_id` and END YOUR TURN.
+BLOCKED_EOF
+}
+park_exits() {
+    cat <<'PARK_EOF'
+   PARK (a blocked Task, instead of the step above): `@@ZERO_SH@@ park task_id` — it commits your
+      work in progress to the Task branch, marks the Task `[🚧]` and removes the worktree.
+      - exit 0 → blocked; zero.sh's last stdout line says so → report that line and END YOUR TURN.
+        Do not claim a second Task.
+      - exit 5 → do what stderr says, retry once, then stop.
+PARK_EOF
+}
+
 build_zero_prompt() {
     local todo="$1" taskprompt="$2"
     local gitdir; gitdir="$(cd "$(git rev-parse --git-dir)" && pwd)"
@@ -6767,8 +7092,9 @@ Keep these facts in mind:
 
 === ALGORITHM (one Task, then end your turn) ===
 1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the first page of the Release
-   Todo List: a `Landed:` line with the ids of every Landed Task (ids only; a link-shaped id is its
-   bracketed label), the two lines before the first Unlanded Task, every Unlanded Task a live peer
+   Todo List: a `Landed:` line with the `[x]` ids (ids only; a link-shaped id is its bracketed
+   label), a `Blocked:` line with the `[🚧]` ids when there are any, the two lines before the first
+   Unlanded Task, every Unlanded Task a live peer
    holds, and the first three free Tasks (Unlanded, held by nobody, one Task file resolved). Its last
    line names where the next page starts: `Next page: todo-list ID`, or `Next page: none` when no
    free Task follows. Take the next page — run `@@ZERO_SH@@ todo-list ID` with exactly that id — only
@@ -6777,8 +7103,10 @@ Keep these facts in mind:
    whitespace-delimited token after the checkbox:
        - [ ] SMTH-855 some Task Unlanded /repo/tasks/SMTH-855.md  ← UNCHECKED = still to do
        - [ ] SMTH-856 ⚒️ held by a live peer some Task /repo/tasks/SMTH-856.md  ← held = not a candidate
-       - [x] 7.a some Task already Landed         ← CHECKED   = Landed, skip it
-       - [?] 9 some Task Landed, needs review     ← any other symbol = Landed, not yours to claim
+       - [x] 7.a some Task already Landed         ← [x] = Landed, skip it
+       - [🚧] 8 some Task blocked by an outside cause  ← [🚧] = blocked, not yours to claim
+       - [?] 9 some Task, branches review needed  ← [?] = branches review needed, not yours to claim
+                                                     any other symbol = not Landed and not claimable
    That first token is the task_id (e.g. SMTH-855, 7, 7.a, [BUG-5348](tasks/...)). An UNCHECKED line ending in a path
    names that id's already-resolved Task file — Read it explicitly, with Read, before judging or
    claiming that candidate; it is that Task's full body, not the one-line summary before it. An
@@ -6808,8 +7136,10 @@ Keep these facts in mind:
            body that names that Task's output. No quotable reference → no edge →
            treat as independent for that pair. Title similarity, adjacency, or "same
            area" is NOT evidence.
-      iv.  A prerequisite whose box is anything but `[ ]` never blocks — its code is merged, its
-           output exists (a `[?]` is Landed code awaiting review, not missing code).
+      iv.  Only `[x]` unblocks: that Task's code is in the base your worktree was forked from.
+           A prerequisite with any other box — `[ ]`, `[🚧]`, `[?]`, `[↑]` or an operator symbol —
+           is unlanded: an inbound edge to it blocks this Task. Read the box of an id that is on
+           neither the `Landed:` nor the `Blocked:` line with `@@ZERO_SH@@ box-symbol-on-base ID`.
       v.   Judge this Task against every unchecked Task: the Landed ids, the held Tasks and the free
            Tasks seen so far. A Task named by id that is on the `Landed:` line never blocks; read its
            file with `@@ZERO_SH@@ task-file ID` when you need to understand what it produced. When
@@ -6892,9 +7222,10 @@ Keep these facts in mind:
       > Agentic self-review gate: passed|failed YYYY-MM-DD HH:MM±HHMM
       Do not leave this step before both gates passed. After gates passed commit the notes with:
       `@@ZERO_SH@@ commit_ac_checkoff task_id`.@@TASKPROMPT@@
+@@BLOCKED@@
    d. MERGE: `@@ZERO_SH@@ merge task_id "$wt" [symbol]` — pass a symbol only when this session's
-      instructions define one for how the Task ended (e.g. `?` = Landed, needs human review);
-      otherwise pass nothing and the box becomes `[x]`. The symbol is one character, never a space.
+      instructions define one for how the Task ended; otherwise pass nothing and the box becomes
+      `[x]`. The symbol is one character, never a space.
       - exit 0 → Landed; zero.sh's last stdout line says where → your one Task is zeroed: report
         that line and END YOUR TURN. Do not claim a second Task.
       - exit 5 → do what stderr says, retry once, then stop.
@@ -6905,15 +7236,20 @@ Keep these facts in mind:
         IMMEDIATELY — report task_id, its worktree $wt and its branch
         (`git -C "$wt" symbolic-ref --short HEAD`), and ask the human to "resolve the conflict on
         that branch, then merge by hand".
+@@PARK@@
 3. End your turn — after zeroing one Task, or after walking the whole Release Todo List without
    claiming one (say which happened). If you walked the whole list and claimed nothing, run
    `@@ZERO_SH@@ no-claim-mark` first — it lets the shell wait for that block to clear instead of
    spending a fresh session on the same judgment. If `@@ZERO_SH@@ todo-list` now prints nothing —
-   every Task has a Landed box (checked or any other symbol) — announce "ALL TASKS LANDED" first. What runs next is the shell's call: it starts a fresh session for the
+   every Task has an `[x]` box — announce "ALL TASKS LANDED" first. If it prints a `Blocked:` or an
+   `Other:` line and no `[ ]` Task, name those Tasks and their boxes instead of the announcement.
+   What runs next is the shell's call: it starts a fresh session for the
    next Task, waits while peers hold everything or the remainder is dependency-blocked, or prints
    the closing report.
 PROMPT_EOF
     prompt=${prompt%$'\n'}          # read keeps the final newline; $(cat) stripped it
+    inject_marker prompt '@@BLOCKED@@' "$(blocked_paragraph)"
+    inject_marker prompt '@@PARK@@' "$(park_exits)"
     inject_marker prompt '@@TODO_ABS@@' "$COORD_ROOT/$todo"
     inject_marker prompt '@@ZERO_SH@@' "$gitdir/zero.sh"
     local tp_chunk=""
@@ -6980,8 +7316,9 @@ Keep these facts in mind:
 
 === ALGORITHM (one Task, then end your turn) ===
 1. FIND candidate Tasks: run `@@ZERO_SH@@ todo-list`. It prints the first page of the Release
-   Todo List: a `Landed:` line with the ids of every Landed Task (ids only; a link-shaped id is its
-   bracketed label), the two lines before the first Unlanded Task, every Unlanded Task a live peer
+   Todo List: a `Landed:` line with the `[x]` ids (ids only; a link-shaped id is its bracketed
+   label), a `Blocked:` line with the `[🚧]` ids when there are any, the two lines before the first
+   Unlanded Task, every Unlanded Task a live peer
    holds, and the first three free Tasks (Unlanded, held by nobody, one Task file resolved). Its last
    line names where the next page starts: `Next page: todo-list ID`, or `Next page: none` when no
    free Task follows. Take the next page — run `@@ZERO_SH@@ todo-list ID` with exactly that id — only
@@ -6990,10 +7327,12 @@ Keep these facts in mind:
    whitespace-delimited token after the checkbox:
        - [ ] SMTH-855 some Task Unlanded /repo/tasks/SMTH-855.md  ← UNCHECKED = still to do
        - [ ] SMTH-856 ⚒️ held by a live peer some Task /repo/tasks/SMTH-856.md  ← held = not a candidate
-       - [x] 7.a some Task already Landed         ← CHECKED   = Landed, skip it
+       - [x] 7.a some Task already Landed         ← [x] = Landed, skip it
        - [↑] 3 some Task under review              ← already spoken for, not yours to claim
        - [⛔] 5 some Task declined                  ← already spoken for, not yours to claim
-       - [?] 9 some Task, needs review              ← any other symbol = already spoken for, not yours to claim
+       - [🚧] 8 some Task blocked by an outside cause  ← [🚧] = blocked, not yours to claim
+       - [?] 9 some Task, branches review needed    ← [?] = branches review needed, not yours to claim
+                                                     any other symbol = not Landed and not claimable
    That first token is the task_id (e.g. SMTH-855, 7, 7.a, [BUG-5348](tasks/...)). An UNCHECKED line ending in a path
    names that id's already-resolved Task file — Read it explicitly, with Read, before judging or
    claiming that candidate; it is that Task's full body, not the one-line summary before it. An
@@ -7024,9 +7363,11 @@ Keep these facts in mind:
            treat as independent for that pair. Title similarity, adjacency, or "same
            area" is NOT evidence.
       iv.  Only `[x]` unblocks: that Task's code is in the base your worktree was forked from.
-           `[ ]` (not started), `[↑]` (in review, not merged yet), `[⛔]` (declined) and `[?]`
-           (needs a human) — and any other symbol — are all NOT in the base yet: an inbound edge
-           to any of them blocks this Task. Skip it and try the next id.
+           `[ ]` (not started), `[↑]` (in review, not merged yet), `[⛔]` (declined), `[🚧]`
+           (blocked) and `[?]` (branches review needed) — and any other symbol — are all NOT in
+           the base yet: an inbound edge to any of them blocks this Task. Skip it and try the
+           next id. Read the box of an id that is on neither the `Landed:` nor the `Blocked:` line
+           with `@@ZERO_SH@@ box-symbol-on-base ID`.
       v.   Judge this Task against every unchecked Task: the Landed ids, the held Tasks and the free
            Tasks seen so far. A Task named by id that is on the `Landed:` line never blocks; read its
            file with `@@ZERO_SH@@ task-file ID` when you need to understand what it produced. When
@@ -7109,6 +7450,7 @@ Keep these facts in mind:
       > Agentic self-review gate: passed|failed YYYY-MM-DD HH:MM±HHMM
       Do not leave this step before both gates passed. After gates passed commit the notes with:
       `@@ZERO_SH@@ commit_ac_checkoff task_id`.@@TASKPROMPT@@
+@@BLOCKED@@
 @@MR_STEP_D@@
    e. HAND OFF: `@@ZERO_SH@@ mr task_id "$wt"` — no symbol to choose: this mode merges no code onto
       the target base, it opens or reuses one @@REQ@@ for the branch instead.
@@ -7119,16 +7461,21 @@ Keep these facts in mind:
         its fork point before this merge runs, so landing the box onto the coordination base is
         always "Already up to date". If it appears anyway, STOP IMMEDIATELY and report it — do not
         go looking for a worktree to resolve it in, you hold only the target checkout ($wt).
+@@PARK@@
 3. End your turn — after zeroing one Task, or after walking the whole Release Todo List without
    claiming one (say which happened). If you walked the whole list and claimed nothing, run
    `@@ZERO_SH@@ no-claim-mark` first — it lets the shell wait for that block to clear instead of
    spending a fresh session on the same judgment. If `@@ZERO_SH@@ todo-list` now prints nothing —
-   every Task has a Landed box (checked or any other symbol) — announce "ALL TASKS HANDED OFF" first. What runs next is the shell's call: it starts a fresh session for the
+   every Task has an `[x]` box — announce "ALL TASKS HANDED OFF" first. If it prints a `Blocked:` or
+   an `Other:` line and no `[ ]` Task, name those Tasks and their boxes instead of the announcement.
+   What runs next is the shell's call: it starts a fresh session for the
    next Task, waits while peers hold everything or the remainder is dependency-blocked, or prints
    the closing report.
 PROMPT_EOF
     prompt=${prompt%$'\n'}          # read keeps the final newline; $(cat) stripped it
     inject_marker prompt '@@MR_STEP_D@@' "$step_d"
+    inject_marker prompt '@@BLOCKED@@' "$(blocked_paragraph)"
+    inject_marker prompt '@@PARK@@' "$(park_exits)"
     inject_marker prompt '@@TODO_ABS@@' "$COORD_ROOT/$todo"
     inject_marker prompt '@@ZERO_SH@@' "$gitdir/zero.sh"
     local tp_chunk=""

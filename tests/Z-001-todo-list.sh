@@ -84,7 +84,7 @@ check "Z3b bytes" "$(wc -c < "$TZR/z3b.out" | tr -d ' ')" "0"
 
 # Z4 — a Landed non-`x` symbol well before the first `[ ]` never anchors the cut
 newrepoz z4
-SYMS=('!' '?' '↑' '⛔' '🚧'); SYM="${SYMS[$((RANDOM % 5))]}"
+SYMS=('!' '?' '↑' '⛔'); SYM="${SYMS[$((RANDOM % 4))]}"   # `[🚧]` has its own `Blocked:` line, covered by ISSUE-085-park-blocked B1
 printf -- '- [%s] Z1 landed other\n- [x] Z2 done\n- [x] Z3 done\n- [x] Z4 done\n- [x] Z5 done\n- [ ] Z6 todo\n- [x] Z7 done later\n' "$SYM" > todo.md
 git add -A; git commit -qm z4
 LC_ALL=en_US.UTF-8 "$ZERO" todo-list > "$TZR/z4.out" 2>&1
@@ -100,7 +100,7 @@ check "Z4 no cut" "$(grep -c 'Z1 landed other' "$TZR/z4.out")" "0"
 # symbol only where `.` is a character rather than a byte — a property of that grammar, which
 # `todo-list` reuses unchanged, not of this subcommand.
 
-# Z5 — every box Landed, mixing `[x]` with another symbol, prints nothing
+# Z5 — no `[ ]` left, `[x]` mixed with another symbol: only `[x]` is Landed, so the other box is named
 newrepoz z5
 SYMS=('!' '?' '↑' '⛔' '🚧'); SYM="${SYMS[$((RANDOM % 5))]}"
 printf -- '- [x] Z1 done\n- [%s] Z2 landed other\n- [x] Z3 done\n' "$SYM" > todo.md
@@ -108,11 +108,11 @@ git add -A; git commit -qm z5
 LC_ALL=en_US.UTF-8 "$ZERO" todo-list > "$TZR/z5.out" 2>&1; rc=$?
 echo "drawn Z5 symbol: $SYM"
 check "Z5 exit" "$rc" "0"
-check "Z5 bytes" "$(wc -c < "$TZR/z5.out" | tr -d ' ')" "0"
-# Z5 PASS — a Landed run mixing `[x]` and `$SYM`, with no `[ ]` anywhere, is exactly the
-# all-Landed verdict `all_todos_done` also reaches on this blob: `todo-list` exits 0 and prints
-# zero bytes, so the launcher's closing report and the session's own "ALL TASKS LANDED" check can
-# never disagree.
+check "Z5 Landed line holds the [x] ids only" "$(grep -c '^Landed: Z1 Z3$' "$TZR/z5.out")" "1"
+check "Z5 the other box is named" "$(grep -c 'Z2' "$TZR/z5.out")" "1"
+# Z5 PASS — silence means every box is `[x]` (Z3b); a list mixing `[x]` with `$SYM` and no `[ ]`
+# prints the Landed ids and names the other box, so the session's "ALL TASKS LANDED" check can
+# tell it from an all-`[x]` list.
 
 # Z6 — an uncommitted todo edit is invisible until it is committed
 newrepoz z6
