@@ -210,11 +210,30 @@ check "O6 no launches" "$(wc -l < "$STUB_LAUNCHED" | tr -d ' ')" "0"
 # O6 PASS — missing exit = 1, nested exit = 1, one bad kills = 1, each with its naming line = 1,
 # and no launches = 0.
 
+# O10 — BUG 086: an entry may be a file, not only a directory. A launch accepts it, a claim links
+# it as a symlink with an info/exclude line, and a name already present in the worktree is skipped.
+printf 'seed\n' > "$TO/repo/.env-seed"; EXR="$(git rev-parse --git-path info/exclude)"; echo '/.env-seed' >> "$EXR"   # keeps the launch's clean-tree check quiet
+check "O10 file launch exit" "$(run_bad '.env-seed' file)" "0"
+check "O10 file not refused" "$(grep -c 'KAIZERO_LINK entry' "$TO/bad-file.log")" "0"
+printf -- '### Acceptance criteria\n- [ ] x\n' > tasks/O3.md
+sed -i.bak '/^\/\.env-seed$/d' "$EXR"   # the claim itself must write the exclude line
+ZERO10="$TO/repo/.git/zero.sh"
+wt10=$(KAIZERO_LINK=.env-seed "$ZERO10" claim O3 2>"$TO/o10.err")
+check "O10 file symlink" "$([ -L "$wt10/.env-seed" ] && [ "$(readlink "$wt10/.env-seed")" = "$TO/repo/.env-seed" ] && echo yes || echo NO)" "yes"
+check "O10 file exclude" "$(grep -c '^/\.env-seed$' "$(git -C "$wt10" rev-parse --git-path info/exclude)")" "1"
+check "O10 file Linked line" "$(grep -c "❄ Linked .env-seed from $TO/repo" "$TO/o10.err")" "1"
+sed -n '/^link_ignored() {/,/^}/p' "$ZERO10" > "$TO/li10.sh"; printf 'session_log() { :; }\n' >> "$TO/li10.sh"
+( set -euo pipefail; . "$TO/li10.sh"; KAIZERO_LINK=todo.md link_ignored "$wt10" "$TO/repo" ) 2>"$TO/o10b.err"
+check "O10 tracked already linked" "$(grep -c '❄ todo.md already linked from' "$TO/o10b.err")" "1"
+check "O10 tracked untouched" "$([ -L "$wt10/todo.md" ] && echo NO || echo yes)" "yes"
+# O10 PASS — every check reports its want value.
+
 # O7 — --help names the variable, so it is discoverable without the README
 H="$(bash "$SCRIPT" -h)"
 check "O7 env block" "$(printf '%s' "$H" | grep -c 'Environment (all variables are in README.md):')" "1"
 # the comma-separated form
 check "O7 names the var" "$(printf '%s' "$H" | grep -c 'KAIZERO_LINK=name\[,name')" "1"
+check "O7 names files" "$(printf '%s' "$H" | grep -c 'Top-level files and directories symlinked')" "1"
 check "O7 says default" "$(printf '%s' "$H" | grep -c 'into every Task worktree. Unset by default')" "1"
 # O7 PASS — all three = 1.
 

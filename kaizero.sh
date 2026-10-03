@@ -151,11 +151,11 @@ version @@VERSION@@
                                    where the walk is logged instead, its plain lines are
                                    written from the start and this delay does not apply.
 
-    KAIZERO_LINK=name[,name…]   Top-level directories symlinked from the repo root
+    KAIZERO_LINK=name[,name…]   Top-level files and directories symlinked from the repo root
                                    into every Task worktree. Unset by default. A worktree
                                    checks out tracked files only, so gitignored Task
-                                   directories a Task line points at are absent there;
-                                   listing them here lets a session read the Acceptance
+                                   files and directories a Task line points at are absent
+                                   there; listing them here lets a session read the Acceptance
                                    Criteria and tick them in the real file.
 
     KAIZERO_TASK_ID_PATTERN=ere Extended regex a Task's first token must match to count
