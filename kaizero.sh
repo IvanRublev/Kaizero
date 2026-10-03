@@ -9,9 +9,6 @@ set -euo pipefail
 
 VERSION="0.1.8"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
-# per-machine state (lifetime landed-Task count, hidden-invitation choice): outside any repository
-# and outside the install location, so a reinstall or upgrade leaves it alone. Also baked into zero.sh.
-kz_state_dir() { printf '%s/kaizero' "${XDG_STATE_HOME:-$HOME/.local/state}"; }
 
 # lowest released version of each forge CLI known to carry every flag/field assert_forge_flags
 # and mr_list/mr_create depend on — named as the fix in that check's failure messages. gh:
@@ -1136,7 +1133,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)          usage; exit 0 ;;
     --version)          echo "$VERSION"; exit 0 ;;
-    --no-interviews)    hide_interviews; exit $? ;;
     -t|--taskprompt)    [ $# -ge 2 ] || { echo "$PROG: $1 needs a value" >&2; exit 1; }; TASK_PROMPT="$2"; shift 2 ;;
     --taskprompt=*)     TASK_PROMPT="${1#*=}"; shift ;;
     --local-merge)       LOCAL_MERGE=1; shift ;;
@@ -2634,48 +2630,6 @@ print_report() {
   box_bottom "$C_DIM"
 }
 
-# `--no-interviews`: record the hidden choice for good. Runs before any repository check.
-hide_interviews() {
-  local d; d="$(kz_state_dir)"
-  { mkdir -p "$d" && : > "$d/interviews-hidden"; } 2>/dev/null \
-    || { echo "$PROG: Cannot record the choice in $d" >&2; return 1; }
-  echo "ok."
-}
-
-# the feedback invitation, printed right before the fleet TOTAL panel once the machine has landed
-# three Tasks and the operator has not hidden it. Styled: indented, colored lines; plain: the same
-# lines, unindented and uncolored, in a box. Blank lines: one before, two after (the panel adds its own).
-print_interview_invite() {
-  local d n; d="$(kz_state_dir)"
-  [ ! -e "$d/interviews-hidden" ] || return 0
-  n="$(read_counter "$d/landed-count")"; [ "$n" -ge 3 ] || return 0
-  local q="Is your Claude Code loop slower than it should be?"
-  local p1="I'm the Kaizero author. We can review your config and hooks together"
-  local p2="in a free 20-minute call."
-  local p3="We'll find what to change, and I'll learn what slows your down."
-  local l1="Let's talk, you can pick a time:" u1="https://go.ivanrublev.com/book-review-cli"
-  local l2="Or share the setup in 5 questions:" u2="https://go.ivanrublev.com/survey-cli"
-  local l3="Not for you? Hide this message:" cmd="$PROG --no-interviews"
-  printf '\n'
-  if [ "$COLOR_CAPABLE" = 1 ]; then
-    printf '  %s %s\n\n' "$(c "$C_BLUE" "$SNOW")" "$q"
-    printf '    %s\n    %s\n\n' "$(c "$C_DIM" "$p1")" "$(c "$C_DIM" "$p2")"
-    printf '    %s\n\n' "$(c "$C_DIM" "$p3")"
-    printf '    %s %s\n\n' "$(c "$C_DIM" "$l1")" "$(c "$C_WHITE" "$u1")"
-    printf '    %s %s\n\n' "$(c "$C_DIM" "$l2")" "$(c "$C_WHITE" "$u2")"
-    printf '    %s %s\n\n\n' "$(c "$C_DIM" "$l3")" "$(c "$C_CYAN" "$cmd")"
-  else
-    box_top ""
-    box_line "" "$q" "$q"; box_line "" "" ""
-    box_line "" "$p1" "$p1"; box_line "" "$p2" "$p2"; box_line "" "" ""
-    box_line "" "$p3" "$p3"; box_line "" "" ""
-    box_line "" "$l1 $u1" "$l1 $u1"; box_line "" "" ""
-    box_line "" "$l2 $u2" "$l2 $u2"; box_line "" "" ""
-    box_line "" "$l3 $cmd" "$l3 $cmd"
-    box_bottom ""; printf '\n\n'
-  fi
-}
-
 # fleet-wide TOTAL for this base, printed once on the exit path beneath this instance's report.
 # The sum is a GLOB, not a registry: every figure is already one file per instance in the git common
 # dir, so a shared aggregate would only be a second copy that can disagree with the first. Read
@@ -2713,7 +2667,6 @@ print_fleet_total() {
     set -- $t
     if [ "$#" -eq 5 ]; then any=1; ti=$((ti+$1)); to=$((to+$2)); tcc=$((tcc+$3)); tcr=$((tcr+$4)); tt=$((tt+$5)); fi
   done
-  print_interview_invite
   printf '\n'
   box_top "$C_GOLD"
   box_line "$C_GOLD" "$(c "$C_BOLD" "TOTAL ($n instance$plural)")" "TOTAL ($n instance$plural)"
@@ -3225,7 +3178,7 @@ write_zero_sh() {
         printf '# shellcheck disable=SC2034\nMR_MODE=%q\n' "$MR_MODE"
         printf '# shellcheck disable=SC2034\nFORGE=%q\n' "${FORGE:-}"
         printf '# shellcheck disable=SC2034\nORIGIN_URL=%q\n' "${ORIGIN_URL:-}"
-        declare -f atomic_put kz_state_dir
+        declare -f atomic_put
         cat <<'ZERO_EOF'
 # neither the caller's cwd nor an inherited git environment variable may pick the repository a
 # git call below answers for — GIT_DIR/GIT_COMMON_DIR outrank both cwd and -C — so they are
@@ -3290,12 +3243,6 @@ add_todos_done() {
   local inst=${1:-}
   [ -n "$inst" ] || inst=shared
   add_counter 1 "$(todos_done_file "$inst")"
-  add_machine_landed
-}
-# +1 to the per-machine lifetime landed count (the feedback invitation reads it). Fail-open: an
-# unwritable state location costs the count, never the landing — silent, in a subshell, status ignored.
-add_machine_landed() {
-  ( d="$(kz_state_dir)" && mkdir -p "$d" && add_counter 1 "$d/landed-count" ) >/dev/null 2>&1 || true
 }
 # Path of THIS process's own safe-to-exit marker — keyed by $INSTANCE_ID, the CURRENT
 # instance, never the (possibly different, possibly dead) owner add_todos_time/add_todos_done
