@@ -45,6 +45,7 @@ done
 TESTROOT="$(mktemp -d "${TMPDIR:-/tmp}/kaizero-tests.XXXXXX")"   # isolated, outside the repo
 TESTROOT="$(cd "$TESTROOT" && pwd -P)"          # canonical path: on macOS $TMPDIR is /var→/private/var; the root-guard compares $PWD to git's physical path, so an uncanonicalized /var path misfires "not at repo root" at the real root
 echo "TESTROOT=$TESTROOT"
+export XDG_STATE_HOME="$TESTROOT/state"   # per-machine state (ISSUE 084) stays inside the test root, never the real $HOME
 # A and C's fixed, pre-trusted coordination repos (see TEST.md Prerequisites) live here, not under
 # $TESTROOT — real `claude`'s trust dialog is keyed on a git repo's own root, not inherited from an
 # ancestor, so their $T/$TC must be a permanent path, trusted once, out of band. Named exactly, not
