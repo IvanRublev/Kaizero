@@ -7,7 +7,6 @@
 Loops Claude until every Task is implemented, committed, and checked off.<br>
 Restarts the coding session on a fresh context before rot.<br>
 You can spawn multiple instances to parallelize.<br><br>
-It's for practical <a href="#loop-engineering">Loop engineering</a>.<br>
 </h4>
 
 <p align="center">
