@@ -72,7 +72,7 @@ PATH="$TN/bin:$PATH" timeout 20 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-m
 # code 99 means the wrong branch fired
 check "AB3 exit" "$?" "0"
 # the JSON blob survived the round trip
-check "AB3 got --settings" "$(sed -n '2p' "$TN/ab3.args" | grep -c '"hooks":{"Stop"')" "1"
+check "AB3 got --settings" "$(sed -n '2p' "$TN/ab3.args" | grep -c '"Stop":\[{"hooks"')" "1"
 check "AB3 got --session-id" "$(grep -A1 '^--session-id$' "$TN/ab3.args" | tail -1 | grep -cE '^[0-9a-f-]{36}$')" "1"
 # the multi-line, quote- and backtick-laden prompt survived
 check "AB3 prompt intact" "$(grep -c 'ALGORITHM (one Task, then end your turn)' "$TN/ab3.args")" "1"

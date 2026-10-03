@@ -25,8 +25,9 @@ mkrepo(){ mkdir -p "$1"; ( cd "$1"; git init -q -b main; git config user.email t
 extract_fn(){ eval "$(sed -n "/^$1() {/,/^}/p" "$2")"; }
 
 # --- prepare-commit-msg hook: install ---
+# the { } blocks here are groups, not ( ) subshells: check() sets FAILED, which a subshell would drop.
 mkrepo "$TT/r1"
-( extract_fn write_prepare_commit_msg_hook "$REAL_SCRIPT"
+{ extract_fn atomic_put "$REAL_SCRIPT"; extract_fn write_prepare_commit_msg_hook "$REAL_SCRIPT"
   write_prepare_commit_msg_hook "$TT/r1"
   hook="$TT/r1/.git/hooks/prepare-commit-msg"
   check "hook file exists" "$([ -f "$hook" ] && echo yes || echo no)" "yes"
@@ -47,17 +48,17 @@ mkrepo "$TT/r1"
   msg="$TT/r1-msg4"; printf 'a commit\n\nCo-authored-by: Kaizero <noreply@kaizero.sh>\n' > "$msg"
   KAIZERO_INSTANCE=x "$hook" "$msg"
   check "amend/reword idempotent: trailer not duplicated" "$(grep -cF 'Co-authored-by: Kaizero <noreply@kaizero.sh>' "$msg")" "1"
-)
+}
 # PASS — write_prepare_commit_msg_hook installs an executable hook in the given repo's git dir;
 # the hook only appends the Kaizero trailer for a kaizero.sh-launched session (KAIZERO_INSTANCE
 # set), honors KAIZERO_NO_CO_AUTHORSHIP as an override, and stays idempotent on reword/amend.
 
 # --- MR body closing line ---
-( extract_fn mr_body_add_closing_line "$REAL_SCRIPT"
+{ extract_fn mr_body_add_closing_line "$REAL_SCRIPT"
   body="$TT/body1.md"; printf 'A description of the change.\n' > "$body"
   mr_body_add_closing_line "$body"
   check "closing line appended" "$(grep -cF 'Guided by [Kaizero](https://kaizero.sh)' "$body")" "1"
-)
+}
 # PASS — mr_body_add_closing_line appends the Kaizero closing line to the MR body.
 
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"

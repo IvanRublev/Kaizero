@@ -6639,7 +6639,7 @@ validate_tasks() {
         if ! [ "$cachefile" -nt "$p" ]; then hit=0; break; fi
       done
     fi
-    [ "$hit" = 0 ] && [ "$locked" = 0 ] || break
+    if [ "$hit" != 0 ] || [ "$locked" != 0 ]; then break; fi
     lock_step "$COORD_GITDIR/validate-tasks-${cachefile##*-}.lock" 'validating task definitions'; locked=1
     done
     if [ "$hit" = 0 ]; then
