@@ -552,10 +552,11 @@ KAIZERO_DEPENDENCY_WAIT=20m kaizero todo.md
 KAIZERO_PROGRESS_DELAY=0 kaizero todo.md
 ```
 
-**`KAIZERO_LINK`** — comma-separated top-level names symlinked from the repo root into every Task worktree. Unset by default. A worktree is a checkout of tracked files only, so anything gitignored is absent there: if your Task lines point at Task files you keep in another git repository — `tasks/TASK-031.md` holding the Acceptance Criteria for `- [ ] TASK-031 …` — the session never sees them and works from the one-line title alone. Listing the directory here links it in, so the criteria are readable and a tick lands in the real file rather than in a copy the worktree removal deletes. Each linked name is added to `.git/info/exclude`, so it stays out of the session's `git add -A` and out of this repository.
+**`KAIZERO_LINK`** — comma-separated top-level names — files and directories alike — symlinked from the repo root into every Task worktree. Unset by default. A worktree is a checkout of tracked files only, so anything gitignored is absent there: if your Task lines point at Task files you keep in another git repository — `tasks/TASK-031.md` holding the Acceptance Criteria for `- [ ] TASK-031 …` — the session never sees them and works from the one-line title alone. Listing the name here links it in (a single untracked file such as `.env-seed` works the same way), so the criteria are readable and a tick lands in the real file rather than in a copy the worktree removal deletes. Each linked name is added to `.git/info/exclude`, so it stays out of the session's `git add -A` and out of this repository.
 
 ```sh
-KAIZERO_LINK=tasks kaizero todo.md
+KAIZERO_LINK=tasks kaizero todo.md        # a directory
+KAIZERO_LINK=.env-seed kaizero todo.md    # a single file
 ```
 
 **`KAIZERO_TASK_ID_PATTERN`** — extended regex a Task's first token must match to count as an id, enforced at step 1 against the Todo list's current version. Default `^[A-Za-z0-9._/-]*[0-9][A-Za-z0-9._/-]*$` — matches `SMTH-855`, `7`, `7.a`, `TASK-030`; rejects a line that starts straight into prose, whose first word would otherwise become a branch name. Set `.` to disable the shape check entirely and keep only the no-token case, for an id scheme with no digit in it. A first token shaped as a markdown link (e.g. `[SMTH-855](tasks/...)`) has its bracketed text unwrapped before the pattern check runs, so the pattern is checked against the label, never the whole bracketed token.
