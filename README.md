@@ -16,6 +16,9 @@ You can spawn multiple instances to parallelize.<br><br>
   <img src="https://img.shields.io/badge/TDD-yes-brightgreen" alt="TDD" />
 </p>
 
+> 💬 Is your Claude Code loop slower than it should be? You can bring your config and hooks to a [free 20-minute review from the Kaizero author](https://go.ivanrublev.com/book-review-gh) or tell about it in the [five questions survey](https://go.ivanrublev.com/survey-gh
+). We'll find what to change together, and I'll learn what slows your down.
+
 Runs [`claude`](https://claude.com/product/claude-code) on a predefined prompt in a loop on the given Todo List — the file of Task lines selected to ship together as one Release. Makes it hand off each Task for review by default, or land it directly with `--local-merge`: implement, commit, and open a merge/pull request or merge to the base branch — then check the box off once the work reaches the base branch. The session stays interactive, so you can add prompts and make choices as it runs. Launches `claude` in auto permission mode by default, and restarts it on a fresh context before rot sets in.
 
 ## Contents
