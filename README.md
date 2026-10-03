@@ -11,6 +11,9 @@ You can spawn multiple instances to parallelize.<br><br>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" /></a>
+  <a href="https://github.com/IvanRublev/kaizero/releases/latest"><img src="https://img.shields.io/github/v/release/IvanRublev/kaizero" alt="Release" /></a>
+  <a href="https://github.com/IvanRublev/kaizero/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/IvanRublev/kaizero/ci.yml?branch=master&label=CI" alt="CI" /></a>
+  <img src="https://img.shields.io/badge/TDD-yes-brightgreen" alt="TDD" />
 </p>
 
 Runs [`claude`](https://claude.com/product/claude-code) on a predefined prompt in a loop on the given Todo List — the file of Task lines selected to ship together as one Release. Makes it hand off each Task for review by default, or land it directly with `--local-merge`: implement, commit, and open a merge/pull request or merge to the base branch — then check the box off once the work reaches the base branch. The session stays interactive, so you can add prompts and make choices as it runs. Launches `claude` in auto permission mode by default, and restarts it on a fresh context before rot sets in.
