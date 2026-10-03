@@ -167,7 +167,8 @@ check "U18 2.a.iv: only [x] unblocks" "$(echo "$out18" | grep -c 'Only .\[x\]. u
 check "U18 2.a.iv: zero-prompt wording gone" "$(echo "$out18" | grep -c 'anything but .\[ \]. never blocks')" "0"
 check "U18 step e names zero.sh mr" "$(echo "$out18" | grep -c 'zero.sh mr task_id')" "1"
 check "U18 step e: no symbol to choose" "$(echo "$out18" | grep -c 'no symbol to choose')" "1"
-check "U18 step e: exit 5 routing kept" "$(echo "$out18" | grep -c 'exit 5 → do what stderr says, retry once, then stop')" "1"
+# twice: the hand-off step's own exit 5 and the park exits' (ISSUE 085)
+check "U18 step e: exit 5 routing kept" "$(echo "$out18" | grep -c 'exit 5 → do what stderr says, retry once, then stop')" "2"
 check "U18 step e: exit 2 is a stop, reported" "$(echo "$out18" | grep -c 'STOP IMMEDIATELY and report it')" "1"
 check "U18 step e: not read as a conflict" "$(echo "$out18" | grep -c 'CODE CONFLICT')" "0"
 check "U18 step e: no worktree hunt" "$(echo "$out18" | grep -c 'go looking for a worktree')" "1"

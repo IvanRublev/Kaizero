@@ -66,8 +66,9 @@ check "AD1 no 'land' verb in the block" "$(grep -ci '\bland\b' "$AD1/block.txt")
 # stated once, earlier in step c
 check "AD1 tick not restated in block" "$(grep -c '\[ \]\`→\`\[x\]\`' "$AD1/block.txt")" "0"
 check "AD1 no fixed iteration count" "$(grep -c 'up to [0-9]* time' "$AD1/block.txt")" "0"
-# no stray line between the block's last line and step d/DESCRIBE
-check "AD1 next line after block is d/DESCRIBE" "$(awk '/commit_ac_checkoff task_id`\./{n++; if(n==2){getline; print; exit}}' "$AD1/noflag.log" | grep -c '^   d\. MERGE:\|DESCRIBE:')" "1"
+# no stray line between the block's last line and step d/DESCRIBE — the BLOCKED paragraph (ISSUE 085)
+# is the one passage that follows the block, and ends on its own "END YOUR TURN." line
+check "AD1 next line after block is d/DESCRIBE" "$(awk '/commit_ac_checkoff task_id`\./{n++; if(n==2){while ((getline l) > 0 && l !~ /END YOUR TURN\.\r?$/); getline; print; exit}}' "$AD1/noflag.log" | grep -c '^   d\. MERGE:\|DESCRIBE:')" "1"
 check "AD1 taskprompt appended after (-t)" "$(awk '/commit_ac_checkoff task_id`\./{n++; if(n==2){getline; print; exit}}' "$AD1/flag.log" | grep -c 'Use TDD strictly\.')" "1"
 check "AD1 fixed block still whole (-t)" "$(grep -c 'commit that checkoff' "$AD1/flag.log")" "1"
 

@@ -70,7 +70,8 @@ n_same_body="$(wc -l < "$T21/same.body" | tr -d ' ')"
 check "T21 same body >= 60 lines" "$([ "$n_same_body" -ge 60 ] && echo yes || echo NO)" "yes"
 # one text, only the baked path differs
 check "T21 same == two, prompt bodies" "$(diff <(sed "s#$T21/same#@R@#g" "$T21/same.body") <(sed "s#$T21/plan#@R@#g" "$T21/two.body") >/dev/null 2>&1 && echo yes || echo NO)" "yes"
-check "T21 exit-5 routing text present" "$(grep -c 'exit 5 → do what stderr says, retry once, then stop' "$T21/same.log")" "1"
+# twice: the merge step's own exit 5 and the park exits' (ISSUE 085)
+check "T21 exit-5 routing text present" "$(grep -c 'exit 5 → do what stderr says, retry once, then stop' "$T21/same.log")" "2"
 check "T21 exit-2 routing text present" "$(grep -c 'exit 2 → a CODE CONFLICT' "$T21/same.log")" "1"
 check "T21 only \$wt named in prompt" "$(grep -o '\$[A-Za-z_][A-Za-z_0-9]*' "$T21/same.body" | sort -u | tr '\n' ' ')" '$wt '
 check "T21 no 'twt' in prompt" "$(grep -c 'twt' "$T21/same.body")" "0"
