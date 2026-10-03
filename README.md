@@ -10,8 +10,8 @@ You can spawn multiple instances to parallelize.<br><br>
 </h4>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" /></a>
-  <a href="https://github.com/IvanRublev/kaizero/releases/latest"><img src="https://img.shields.io/github/v/release/IvanRublev/kaizero" alt="Release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+  <a href="https://github.com/IvanRublev/kaizero/tags"><img src="https://img.shields.io/github/v/tag/IvanRublev/kaizero?sort=semver&label=release" alt="Release" /></a>
   <a href="https://github.com/IvanRublev/kaizero/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/IvanRublev/kaizero/ci.yml?branch=master&label=CI" alt="CI" /></a>
   <img src="https://img.shields.io/badge/TDD-yes-brightgreen" alt="TDD" />
 </p>
