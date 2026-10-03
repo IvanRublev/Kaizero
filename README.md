@@ -21,6 +21,10 @@ You can spawn multiple instances to parallelize.<br><br>
 
 Kaizero runs [`claude`](https://claude.com/product/claude-code) on a predefined prompt in a loop on the given Todo list — the file of Task lines selected to ship together as one Release. For each task, it builds an implementation and either opens a merge/pull request or merges to the base branch when you start it with `--local-merge` option. Kaizero restarts claude before the [context rot](#context-rot) sets in and after each completed task so the fresh instance picks up the changes in CLAUDE.md
 
+<p align="center">
+  <video src="kz-tmux-640@2.mp4" controls muted width="640"></video>
+</p>
+
 ## Contents
 
 - [What it does](#what-it-does)
