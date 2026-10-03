@@ -115,7 +115,7 @@ and the ones caused by missing synchronization run concurrently again
 - [x] BUG-082 Launchers write shared executable helpers and coordination records in place, so a peer that runs or reads one while it is rewritten gets a truncated file (f.e. `.git/zero.sh: line 2193: syntax error: unexpected end of file`), where a whole-file replace was intended tasks/BUG-082.md
 - [x] BUG-083 A zeroing session can switch its Task worktree off the claim branch with one `git checkout`, so a peer rescues the live Task, where the session prompt's ban on switching branches was intended to hold tasks/BUG-083.md
 - [x] ISSUE-084 Operator who has landed three Tasks is invited to a feedback call or survey on the exit report, and `kaizero --no-interviews` hides the invitation for good tasks/ISSUE-084.md
-- [ ] ISSUE-085 Session blocks a Task it cannot implement, so the Task keeps its branch and shows `[🚧]` until a human clears the box tasks/ISSUE-085.md
+- [x] ISSUE-085 Session blocks a Task it cannot implement, so the Task keeps its branch and shows `[🚧]` until a human clears the box tasks/ISSUE-085.md
 - [ ] BUG-086 `kaizero --help` and the README describe `KAIZERO_LINK` as linking directories, where it links any top-level file or directory tasks/BUG-086.md
 - [?] TASK-091 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-092 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, 
