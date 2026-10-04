@@ -220,7 +220,8 @@ check "O10 file not refused" "$(grep -c 'KAIZERO_LINK entry' "$TO/bad-file.log")
 printf -- '### Acceptance criteria\n- [ ] x\n' > tasks/O3.md
 grep -vxF '/.env-seed' "$EXR" > "$EXR.new"; mv "$EXR.new" "$EXR"   # the claim itself must write the exclude line
 ZERO10="$TO/repo/.git/zero.sh"
-wt10=$(KAIZERO_LINK=.env-seed "$ZERO10" claim O3 2>"$TO/o10.err")
+REC10="$TO/o10-session"; printf '%s\n%s\n%s\n' "$$" "$(ps -o lstart= -p $$ | awk '{$1=$1;print}')" 1 > "$REC10"   # claim needs a session record, as the drivers above write
+wt10=$(KAIZERO_SESSION_RECORD="$REC10" KAIZERO_SESSION_EPOCH=1 KAIZERO_LINK=.env-seed "$ZERO10" claim O3 2>"$TO/o10.err")
 check "O10 file symlink" "$([ -L "$wt10/.env-seed" ] && [ "$(readlink "$wt10/.env-seed")" = "$TO/repo/.env-seed" ] && echo yes || echo NO)" "yes"
 check "O10 file exclude" "$(grep -c '^/\.env-seed$' "$(git -C "$wt10" rev-parse --git-path info/exclude)")" "1"
 check "O10 file Linked line" "$(grep -c "❄ Linked .env-seed from $TO/repo" "$TO/o10.err")" "1"
