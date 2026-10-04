@@ -132,9 +132,10 @@ check "F4 unchecked count" "$("$ZERO" unchecked-todos)" "0"
 "$ZERO" "done" 4.
 check "F4 is_done ? = 0" "$?" "0"
 PATH="$TF/bin:$PATH" timeout 30 env KAIZERO_MAX_LOOPS=1 bash "$SCRIPT" --local-merge todo.md -t x > "$TF/f4.log" 2>&1 || true
-# all-[?]-or-[x] counts as all done
-check "F4 dojo_proud" "$(grep -c 'surveys the frozen field' "$TF/f4.log")" "1"
-# F4 PASS — unchecked count = 0, is_done ? = 0, dojo_proud = 1: a [?] box is treated as landed
+# all-[?]-or-[x] ends the run, but only an all-[x] list earns the cheer (ISSUE 085)
+check "F4 no dojo_proud over [?]" "$(grep -c 'surveys the frozen field' "$TF/f4.log")" "0"
+# F4 PASS — unchecked count = 0, is_done ? = 0, dojo_proud = 0: a [?] box is never "unchecked"
+# nor claimable, and the run ends without the all-Landed cheer
 # by unchecked_todos, is_done, and all_todos_done alike, never as still-to-do.
 
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"

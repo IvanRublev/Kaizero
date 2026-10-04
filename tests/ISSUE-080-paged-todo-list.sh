@@ -51,7 +51,7 @@ P="$PWD/tasks"
 
 "$ZERO" todo-list > "$TB/p1.out" 2> "$TB/p1.err"; rc=$?
 check "P1 exit" "$rc" "0"; check "P1 stderr empty" "$(wc -c < "$TB/p1.err" | tr -d ' ')" "0"
-exp1=$(printf -- 'Landed: L1 L2 L3 LQ\n- [x] L2 two\n- [x] L3 three\n- [ ] T01 task 01  %s/T01.md\n- [ ] T02%s task 02  %s/T02.md\n- [ ] T03 task 03\n- [ ] T04 task 04\n- [ ] T05 task 05  %s/T05.md\n- [ ] T06 task 06  %s/T06.md\n- [ ] T12%s task 12  %s/T12.md\nNext page: todo-list T06\n' "$P" "$TAG" "$P" "$P" "$P" "$TAG" "$P")
+exp1=$(printf -- 'Landed: L1 L2 L3\n- [x] L2 two\n- [x] L3 three\n- [ ] T01 task 01  %s/T01.md\n- [ ] T02%s task 02  %s/T02.md\n- [ ] T03 task 03\n- [ ] T04 task 04\n- [ ] T05 task 05  %s/T05.md\n- [ ] T06 task 06  %s/T06.md\n- [ ] T12%s task 12  %s/T12.md\nNext page: todo-list T06\n' "$P" "$TAG" "$P" "$P" "$P" "$TAG" "$P")
 check "P1 first page exact" "$(diff <(printf '%s\n' "$exp1") "$TB/p1.out" > /dev/null && echo yes || echo NO)" "yes"
 
 "$ZERO" todo-list T06 > "$TB/p2.out" 2>&1

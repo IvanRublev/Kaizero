@@ -228,12 +228,35 @@ Kaizero owns the mechanics and leaves the learning to you. It drills the *form* 
 
 The kata is a strict algorithm every instance runs, one Task per `claude` session:
 
-1. Find & validate — collect Tasks with `zero.sh todo-list`, read from the committed Release Todo list blob, never the working tree, in pages: the first page is a `Landed:` line with the ids of every Landed Task, the leading context lines, every Task held by a live peer (tagged `⚒️ held by a live peer` right behind its id) and three free Tasks, and its last line `Next page: todo-list ID` (or `Next page: none`) gives the exact argument for the next page; `zero.sh task-file ID` prints the Task file of any Task by its id; a missing or duplicate id stops the loop; each Task's file path comes from a resolved list the loop rebuilds with `zero.sh resolve-tasks` whenever a Task file name or an unchecked id changes.
+1. Find & validate — collect Tasks with `zero.sh todo-list`, read from the committed Release Todo list blob, never the working tree, in pages: the first page is a `Landed:` line with the `[x]` ids, a `Blocked:` line with the `[🚧]` ids, the leading context lines, every Task held by a live peer (tagged `⚒️ held by a live peer` right behind its id) and three free Tasks, and its last line `Next page: todo-list ID` (or `Next page: none`) gives the exact argument for the next page; `zero.sh task-file ID` prints the Task file of any Task by its id; a missing or duplicate id stops the loop; each Task's file path comes from a resolved list the loop rebuilds with `zero.sh resolve-tasks` whenever a Task file name or an unchecked id changes.
 2. Judge independence by evidence — blocked only if the body quotably consumes an *unchecked* Task's output; adjacency is not a dependency.
 3. Claim & re-check — one Task per git worktree (branch = claim), then guard against a peer who already Landed it.
 4. Implement, commit — scoped to that Task; the Todo list is read-only, never edited by the agent.
 5. Merge serially — the box is ticked on the base after the code lands; on a conflict, resolve once, else stop and hand off to the user rather than corrupt the base.
-6. End the session — the shell starts a fresh one for the next Task, or waits without spending a token while peers hold the rest; when every box is checked, announce every Task Landed and stop.
+6. End the session — the shell starts a fresh one for the next Task, or waits without spending a token while peers hold the rest; when every box is `[x]`, announce every Task Landed and stop. A Task the session cannot implement for an outside reason is [blocked](#blocked-tasks) instead.
+
+### Blocked Tasks
+
+A session that finds its Task impossible to implement for an outside reason — an outside resource,
+state shared with peers, a missing capability, or a wait on an external condition longer than 5
+minutes — decides it by evidence it observed, after the workarounds its own setup defines, and writes
+one quote line at the end of the Task file's Acceptance criteria section:
+
+```
+> Blocked 2026-10-03 12:00+0000 shared limiter rejects every test run; evidence: HTTP 429; unblocks when: the quota resets
+```
+
+It commits the line with `zero.sh commit_ac_checkoff`, then runs `zero.sh park ID`. `park` commits the
+worktree's work in progress to the Task branch, writes `[🚧]` to the Task's box, removes the worktree
+and keeps the branch; it lands nothing, pushes nothing and opens no request, in every mode. The
+Release Todo List shows `[🚧]`, `todo-list` names the Task on a `Blocked:` line, and the exit report
+counts and names the blocked Tasks apart from the Landed ones. A run with no `[ ]` box left, or with
+no peer holding a Task and nothing claimable beyond the blocked ones, ends with that report instead of
+waiting. `kaizero --doctor` names a `[🚧]` box whose Task branch is gone.
+
+To reopen a Task, clear its box to `[ ]`: the next claim reattaches the kept branch, and the
+`> Blocked` line stays in the Task file as the record of why it stopped. Only `[x]` unblocks a
+dependent Task; `[🚧]` and `[?]` count as unlanded.
 
 ### Closing the loop
 
@@ -305,16 +328,16 @@ MR mode reads three more environment variables — `KAIZERO_FORGE`, `KAIZERO_REV
 and `KAIZERO_REVIEW_POLL` — described with the rest under
 [Prompts and environment variables](#prompts-and-environment-variables).
 
-**The four box symbols this mode writes**, beyond the usual `[ ]`/`[x]`:
+**The box symbols this mode writes**, beyond the usual `[ ]`/`[x]`:
 
 | Symbol | Asserts |
 |---|---|
 | `[↑]` | pushed; a request is open, awaiting review |
 | `[x]` | the request merged into the target base |
 | `[⛔]` | the request was declined (closed unmerged) |
-| `[?]` | the request sync can't tell — a human looks: two branches for the id, no branch, no request, a merge onto a base this run doesn't know, or a merge onto some other base entirely |
+| `[?]` | Branches review needed — the request sync can't tell, a human looks: two branches for the id, no branch, no request, a merge onto a base this run doesn't know, or a merge onto some other base entirely. The cause is written to the Task file as a `> Branches review needed YYYY-MM-DD HH:MM±HHMM <cause>` line at the end of its Acceptance criteria section |
 
-Only `[x]` unblocks a dependent Task — `[↑]`, `[⛔]` and `[?]` are all "not yet in the base" as far
+Only `[x]` unblocks a dependent Task — `[↑]`, `[⛔]`, `[🚧]` and `[?]` are all "not yet in the base" as far
 as step 2.a.iv of the zero prompt is concerned, exactly like `[ ]`, so a Task that consumes another
 Task's output waits out its whole review, not just its landing.
 
@@ -529,10 +552,11 @@ KAIZERO_DEPENDENCY_WAIT=20m kaizero todo.md
 KAIZERO_PROGRESS_DELAY=0 kaizero todo.md
 ```
 
-**`KAIZERO_LINK`** — comma-separated top-level names symlinked from the repo root into every Task worktree. Unset by default. A worktree is a checkout of tracked files only, so anything gitignored is absent there: if your Task lines point at Task files you keep in another git repository — `tasks/TASK-031.md` holding the Acceptance Criteria for `- [ ] TASK-031 …` — the session never sees them and works from the one-line title alone. Listing the directory here links it in, so the criteria are readable and a tick lands in the real file rather than in a copy the worktree removal deletes. Each linked name is added to `.git/info/exclude`, so it stays out of the session's `git add -A` and out of this repository.
+**`KAIZERO_LINK`** — comma-separated top-level names — files and directories alike — symlinked from the repo root into every Task worktree. Unset by default. A worktree is a checkout of tracked files only, so anything gitignored is absent there: if your Task lines point at Task files you keep in another git repository — `tasks/TASK-031.md` holding the Acceptance Criteria for `- [ ] TASK-031 …` — the session never sees them and works from the one-line title alone. Listing the name here links it in (a single untracked file such as `.env-seed` works the same way), so the criteria are readable and a tick lands in the real file rather than in a copy the worktree removal deletes. Each linked name is added to `.git/info/exclude`, so it stays out of the session's `git add -A` and out of this repository.
 
 ```sh
-KAIZERO_LINK=tasks kaizero todo.md
+KAIZERO_LINK=tasks kaizero todo.md        # a directory
+KAIZERO_LINK=.env-seed kaizero todo.md    # a single file
 ```
 
 **`KAIZERO_TASK_ID_PATTERN`** — extended regex a Task's first token must match to count as an id, enforced at step 1 against the Todo list's current version. Default `^[A-Za-z0-9._/-]*[0-9][A-Za-z0-9._/-]*$` — matches `SMTH-855`, `7`, `7.a`, `TASK-030`; rejects a line that starts straight into prose, whose first word would otherwise become a branch name. Set `.` to disable the shape check entirely and keep only the no-token case, for an id scheme with no digit in it. A first token shaped as a markdown link (e.g. `[SMTH-855](tasks/...)`) has its bracketed text unwrapped before the pattern check runs, so the pattern is checked against the label, never the whole bracketed token.
