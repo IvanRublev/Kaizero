@@ -4,6 +4,25 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-10-04
+
+### Added
+
+- A session that cannot implement its Task for an outside reason (an outside resource, state shared
+  with peers, a missing capability, or a wait longer than 5 minutes) now parks it as blocked
+  instead of stalling the run. The Todo List shows the Task as `[🚧]`, the reason and the
+  evidence are written into the Task file, and the work done so far is kept on the Task's branch.
+  Clear the box to `[ ]` to reopen the Task and the next session picks up where it stopped.
+- The Todo List shows blocked Tasks on their own `Blocked:` line, and the final report counts and
+  names them apart from the Landed ones.
+- A run with nothing left to claim beyond blocked Tasks ends with that report instead of waiting.
+- `kaizero --doctor` names a blocked Task whose branch is gone.
+- A Task marked `[?]` in MR mode now says why: the cause is written into its Task file as a
+  `Branches review needed` note, so you know what to look at.
+- A blocked Task does not unblock a Task that depends on it; only a landed one does.
+- `KAIZERO_LINK` accepts single files as well as directories, so one untracked file such as
+  `.env-seed` can be linked into every Task worktree.
+
 ## [0.1.8] - 2026-10-03
 
 ### Added
