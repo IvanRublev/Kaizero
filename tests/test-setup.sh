@@ -115,6 +115,16 @@ case "\$PWD" in
   "$ANCHOR"|"$ANCHOR"/*) ;;
   *) echo "REFUSING: cwd \$PWD is not under TESTROOT=$TESTROOT or ANCHOR=$ANCHOR — not invoking kaizero.sh" >&2; exit 1 ;;
 esac
+# every run gets its own CLAUDE_CONFIG_DIR holding a trust entry for its target (the physical cwd),
+# so the stub-claude scenarios pass kaizero's trust check without touching the operator's real
+# ~/.claude.json; a scenario that sets TEST_CLAUDE_CONFIG_DIR_KEEP=1 (A-001, C-001: real claude;
+# the trust scenario, which supplies its own CLAUDE_CONFIG_DIR) keeps the environment it has.
+if [ "\${TEST_CLAUDE_CONFIG_DIR_KEEP:-}" != 1 ]; then
+  cfg=\$(mktemp -d "$TESTROOT/guard/claude-config.XXXXXX")
+  key=\$(pwd -P | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g')
+  printf '{"projects":{"%s":{"hasTrustDialogAccepted":true}}}\\n' "\$key" > "\$cfg/.claude.json"
+  export CLAUDE_CONFIG_DIR="\$cfg"
+fi
 exec "$BASH_ABS" "$REAL_SCRIPT" "\$@"
 EOF
 chmod +x "$SCRIPT"
