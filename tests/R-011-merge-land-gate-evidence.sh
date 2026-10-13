@@ -42,6 +42,7 @@ out=$(check_gate_evidence "$U/f-missing-both.md"); rc=$?
 check "G1 missing-both rc" "$rc" "1"
 check "G1 missing-both names AC gate" "$(printf '%s' "$out" | grep -c 'missing gate note: Acceptance criteria gate')" "1"
 check "G1 missing-both names SR gate" "$(printf '%s' "$out" | grep -c 'missing gate note: Agentic self-review gate')" "1"
+check "G1 missing-both names VD gate" "$(printf '%s' "$out" | grep -c 'missing gate note: Visual design gate')" "1"
 
 # only the self-review gate missing
 cat > "$U/f-missing-sr.md" <<'EOF'
@@ -54,8 +55,41 @@ cat > "$U/f-missing-sr.md" <<'EOF'
 EOF
 out=$(check_gate_evidence "$U/f-missing-sr.md"); rc=$?
 check "G1 missing-sr rc" "$rc" "1"
-check "G1 missing-sr names only SR gate" "$(printf '%s' "$out" | grep -c 'missing gate note:')" "1"
+check "G1 missing-sr names SR and VD gates" "$(printf '%s' "$out" | grep -c 'missing gate note:')" "2"
 check "G1 missing-sr names the right one" "$(printf '%s' "$out" | grep -c 'missing gate note: Agentic self-review gate')" "1"
+check "G1 missing-sr names VD gate" "$(printf '%s' "$out" | grep -c 'missing gate note: Visual design gate')" "1"
+
+# visual note variants: passed/no-ui accepted; failed, other word, glued chars count as missing
+for v in "passed:0" "no-ui:0" "failed:1" "maybe:1" "passedX:1" "no-uiX:1"; do
+  w=${v%%:*}; want=${v##*:}
+  cat > "$U/f-vd-$w.md" <<EOF
+### Acceptance criteria
+
+- [x] first thing works
+  > 2026-09-01 10:00-0700 verified via unit test
+
+> Acceptance criteria gate: passed 2026-09-01 10:10-0700
+> Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: $w 2026-09-01 10:12-0700
+EOF
+  out=$(check_gate_evidence "$U/f-vd-$w.md"); rc=$?
+  check "G1 vd-$w missing count" "$(printf '%s' "$out" | grep -c 'missing gate note: Visual design gate')" "$want"
+done
+
+# a Visual design gate note never counts as a criterion's evidence line
+for w in passed no-ui failed; do
+  cat > "$U/f-vd-ev-$w.md" <<EOF
+### Acceptance criteria
+
+- [x] first thing works
+> Visual design gate: $w 2026-09-01 10:12-0700
+
+> Acceptance criteria gate: passed 2026-09-01 10:10-0700
+> Agentic self-review gate: passed 2026-09-01 10:11-0700
+EOF
+  out=$(check_gate_evidence "$U/f-vd-ev-$w.md"); rc=$?
+  check "G1 vd-ev-$w no evidence" "$(printf '%s' "$out" | grep -c 'ticked criterion has no evidence line')" "1"
+done
 
 # both gates present, one ticked criterion has no evidence line
 cat > "$U/f-missing-evidence.md" <<'EOF'
@@ -67,6 +101,7 @@ cat > "$U/f-missing-evidence.md" <<'EOF'
 
 > Acceptance criteria gate: passed 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
 out=$(check_gate_evidence "$U/f-missing-evidence.md"); rc=$?
 check "G1 missing-evidence rc" "$rc" "1"
@@ -85,6 +120,7 @@ cat > "$U/f-clean.md" <<'EOF'
 
 > Acceptance criteria gate: passed 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
 out=$(check_gate_evidence "$U/f-clean.md"); rc=$?
 check "G1 clean rc" "$rc" "0"
@@ -103,6 +139,7 @@ cat > "$U/f-clean-failed-manual.md" <<'EOF'
 
 > Acceptance criteria gate: failed-manual 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
 out=$(check_gate_evidence "$U/f-clean-failed-manual.md"); rc=$?
 check "G1 failed-manual rc" "$rc" "0"
@@ -118,6 +155,7 @@ cat > "$U/f-unrecognized-outcome.md" <<'EOF'
 
 > Acceptance criteria gate: failed 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
 out=$(check_gate_evidence "$U/f-unrecognized-outcome.md"); rc=$?
 check "G1 unrecognized-outcome rc" "$rc" "1"
@@ -153,6 +191,7 @@ cat > "$U/f-stale-extra.md" <<'EOF'
 > Acceptance criteria gate: passed 2026-08-01 09:00-0700
 > Acceptance criteria gate: passed 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
 out=$(check_gate_evidence "$U/f-stale-extra.md"); rc=$?
 check "G1 stale-extra rc" "$rc" "0"
@@ -176,6 +215,7 @@ cat > tasks/G1a.md <<'EOF'
 
 > Acceptance criteria gate: passed 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
 cat > tasks/G2a.md <<'EOF'
 ### Acceptance criteria
@@ -201,9 +241,9 @@ t2=$("$ZERO" claim G2a)
 echo work2 > "$t2/n2.txt"; git -C "$t2" add n2.txt; git -C "$t2" commit -qm work2
 out=$("$ZERO" merge G2a "$t2" 2>&1); rc=$?
 check "G2 ungated-task merge exit" "$rc" "5"
-# 3 lines: G2a.md's one ticked, unevidenced criterion plus both missing gate notes, each its own
+# 4 lines: G2a.md's one ticked, unevidenced criterion plus all three missing gate notes, each its own
 # "land gate failed at local: " line.
-check "G2 says land gate failed" "$(printf '%s' "$out" | grep -c 'land gate failed at local')" "3"
+check "G2 says land gate failed" "$(printf '%s' "$out" | grep -c 'land gate failed at local')" "4"
 check "G2 names AC gate missing" "$(printf '%s' "$out" | grep -c 'missing gate note: Acceptance criteria gate')" "1"
 check "G2 names SR gate missing" "$(printf '%s' "$out" | grep -c 'missing gate note: Agentic self-review gate')" "1"
 check "G2 box unchecked" "$(grep -c '\[ \] G2a' todo.md)" "1"
@@ -227,6 +267,7 @@ cat > "$TR/two/tasks/G3a.md" <<'EOF'
 
 > Acceptance criteria gate: passed 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
 "$ZERO" commit_ac_checkoff G3a > /dev/null
 echo work5 > "$t5/n5.txt"; git -C "$t5" add n5.txt; git -C "$t5" commit -qm work5
@@ -269,6 +310,7 @@ mkplan(){
 
 > Acceptance criteria gate: passed 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
     cat > tasks/M2.md <<'EOF'
 ### Acceptance criteria
@@ -328,7 +370,7 @@ t3c=$("$ZERO3" claim M3)
 echo work3c > "$t3c/n3c.txt"; git -C "$t3c" add n3c.txt; git -C "$t3c" commit -qm work3c
 out=$("$ZERO3" mr M3 "$t3c" 2>&1); rc=$?
 check "G3 mr missing-sr exit" "$rc" "5"
-check "G3 mr missing-sr names only SR gate" "$(printf '%s' "$out" | grep -c 'missing gate note:')" "1"
+check "G3 mr missing-sr names SR and VD gates" "$(printf '%s' "$out" | grep -c 'missing gate note:')" "2"
 check "G3 mr missing-sr names the right one" "$(printf '%s' "$out" | grep -c 'missing gate note: Agentic self-review gate')" "1"
 check "G3 mr missing-sr box unchecked" "$(grep -c '\[ \] M3' todo.md)" "1"
 
@@ -357,6 +399,7 @@ cat > "$TR/three-plan/tasks/M4.md" <<'EOF'
 
 > Acceptance criteria gate: passed 2026-09-01 10:10-0700
 > Agentic self-review gate: passed 2026-09-01 10:11-0700
+> Visual design gate: no-ui 2026-09-01 10:12-0700
 EOF
 "$ZERO3" commit_ac_checkoff M4 > /dev/null
 echo work3d > "$t3d/n3d.txt"; git -C "$t3d" add n3d.txt; git -C "$t3d" commit -qm work3d
