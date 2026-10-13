@@ -77,6 +77,14 @@ full `kaizero` command to run in each — it tiles them into one tmux session:
 kz-tmux 6 kaizero todo.md
 ```
 
+To hand credentials to every agent without a value on any command line, export them in the launching
+shell and name them in `KZ_COPY_ENV` (space-separated); tmux copies the values into each pane's
+environment. Variables of `kaizero` itself stay a `NAME=value` prefix after the pane count:
+
+```sh
+KZ_COPY_ENV="ACC_ID ACC_TOKEN" kz-tmux 2 KAIZERO_LINK=node_modules kaizero todo.md --local-merge
+```
+
 > ⚠️ Kaizero runs `claude` **unattended with permissions auto-approved** and **commits on its own** to the branch you launch it on. Only ever point it at a Todo list you wrote or reviewed, on a branch with a clean, committed tree — git is your only undo.
 
 ### Sample output
