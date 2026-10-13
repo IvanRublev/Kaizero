@@ -79,13 +79,15 @@ if [ "${#COPY_NAMES[@]}" -gt 0 ]; then
     fi
     PRE_ENV+=(set-option -ag update-environment "$name" \;)
   done
-  # server running: drop the elements appended above, after the highest index; no server yet:
-  # show-options fails and unsetting the global restores tmux's built-in defaults
+  # server running: drop the elements appended above (tmux appends at the first free index);
+  # no server yet: show-options fails and unsetting the global restores tmux's built-in defaults
+  # shortcut: two KZ_COPY_ENV launches started at the same instant can race on the indices, serialize them if needed
   if ORIG_ENV="$(tmux show-options -g update-environment 2>/dev/null)"; then
-    last="$(printf '%s\n' "$ORIG_ENV" | sed -n 's/^update-environment\[\([0-9]*\)\].*/\1/p' | sort -n | tail -1)"
-    i="${last:--1}"
+    used=" $(printf '%s\n' "$ORIG_ENV" | sed -n 's/^update-environment\[\([0-9]*\)\].*/\1/p' | tr '\n' ' ')"
+    i=0
     for name in "${COPY_NAMES[@]}"; do
-      i=$((i + 1))
+      while [[ "$used" == *" $i "* ]]; do i=$((i + 1)); done
+      used="$used$i "
       POST_ENV+=(set-option -gu "update-environment[$i]" \;)
     done
   else

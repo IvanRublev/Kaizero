@@ -38,7 +38,7 @@ wait_dumps(){ local d="$1" n="$2" i=0
 reset(){ local s; for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
   tmux kill-session -t "$s" 2>/dev/null; done; sleep 0.3; }
 # pane command: dumps the pane's environment to DIR/env.<pid>, then idles
-dump_cmd(){ echo "sh -c 'env > $1/env.\$\$; sleep 20'"; }
+dump_cmd(){ echo "sh -c 'env > $1/tmp.\$\$ && mv $1/tmp.\$\$ $1/env.\$\$; sleep 20'"; }
 # run_kz DIR [NAME=value ...] -- kz-tmux args...: starts kz-tmux.sh detached, prints its pid
 run_kz(){
   local dir="$1"; shift; local envs=()
