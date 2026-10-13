@@ -35,6 +35,7 @@ fi
 # run_doctor's own missing-prerequisite messages) — a bareword `bash` there would 127 before
 # run_doctor is ever reached.
 BASH_ABS="$(command -v bash)"
+SED_ABS="$(command -v sed)"   # the guard wrapper runs under scenario-narrowed PATHs that may lack sed
 # bash 3.x for the parse case: macOS ships it as /bin/bash, Homebrew installs it as bash-3.2.
 B3=""
 for c in /bin/bash /usr/local/bin/bash-3.2 /opt/homebrew/bin/bash-3.2; do
@@ -121,9 +122,12 @@ esac
 # the trust scenario, which supplies its own CLAUDE_CONFIG_DIR) keeps the environment it has.
 if [ "\${TEST_CLAUDE_CONFIG_DIR_KEEP:-}" != 1 ]; then
   cfg=\$(mktemp -d "$TESTROOT/guard/claude-config.XXXXXX")
-  key=\$(pwd -P | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g')
+  key=\$(pwd -P | "$SED_ABS" -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g')
   printf '{"projects":{"%s":{"hasTrustDialogAccepted":true}}}\\n' "\$key" > "\$cfg/.claude.json"
   export CLAUDE_CONFIG_DIR="\$cfg"
+  # an operator proxy turns an unresolvable .invalid host into "CONNECT tunnel failed", which the
+  # network-outage guard rightly does not read as a DNS failure; stub-claude scenarios need no proxy
+  unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 fi
 exec "$BASH_ABS" "$REAL_SCRIPT" "\$@"
 EOF

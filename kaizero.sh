@@ -1504,9 +1504,10 @@ if [ -z "${KAIZERO_TEST_EMIT:-}" ]; then
     TRUST_FILE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
     TRUST_JSON=""
     if [ -f "$TRUST_FILE" ]; then
-        TRUST_JSON="$(tr '\n\r\t' '   ' < "$TRUST_FILE" 2>/dev/null)" && [ -r "$TRUST_FILE" ] \
-            && printf '%s' "$TRUST_JSON" | grep -q '"projects"[[:space:]]*:' \
-            || { echo "$PROG: Could not read the trust state of '$TARGET_ROOT' — the content of '$TRUST_FILE' could not be read." >&2; exit 1; }
+        if ! { TRUST_JSON="$(tr '\n\r\t' '   ' < "$TRUST_FILE" 2>/dev/null)" && [ -r "$TRUST_FILE" ] \
+            && printf '%s' "$TRUST_JSON" | grep -q '"projects"[[:space:]]*:'; }; then
+            echo "$PROG: Could not read the trust state of '$TARGET_ROOT' — the content of '$TRUST_FILE' could not be read." >&2; exit 1
+        fi
     fi
     # JSON-escape the key (backslash, double quote), then escape it again for sed's ERE
     TRUST_KEY="$(printf '%s' "$TARGET_ROOT" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[][\.*^$/(){}+?|]/\\&/g')"
