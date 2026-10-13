@@ -152,6 +152,7 @@ check "I2 KAIZERO_TEST_EMIT: no trust message" "$(has "$TR/i2.out" "not trusted"
 check "J1 no new flag or environment variable of its own" "$(sed -n '/^# --- the target must be trusted by claude/,/^fi$/p' "$REAL_SCRIPT" | grep -c 'KAIZERO_[A-Z_]*TRUST\|--trust')" "0"
 check "J2 the check calls no jq or python" "$(sed -n '/^# --- the target must be trusted by claude/,/^fi$/p' "$REAL_SCRIPT" | grep -v '^#' | grep -c 'jq\|python')" "0"
 check "J3 README Prerequisites mentions trust" "$(sed -n '/^### Prerequisites/,/^### /p' "$REPO/README.md" | grep -c 'trust')" "1"
+check "J4 no entry for this run in the operator's real ~/.claude.json" "$(grep -cF "$TESTROOT" "$HOME/.claude.json" 2>/dev/null)" "0"
 
 cd "$TESTROOT"
 . "$SCENARIO_DIR/test-teardown-reap.sh" "$TESTROOT"
