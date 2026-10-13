@@ -4,6 +4,29 @@ All notable changes to Kaizero are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-10-13
+
+### Added
+
+- `KZ_COPY_ENV` on `kz-tmux` passes environment variables, for example
+  `KZ_COPY_ENV="ACC_ID ACC_TOKEN" kz-tmux 2 kaizero todo.md`. Every pane's `kaizero` session
+  receives their values from your shell, so an API token reaches all agents without a
+  `NAME=value` prefix that shows the value in process listings and pane scrollback. A name that
+  is not a plain variable name stops the launch with the usage error.
+- A Task that changes a page, component or stylesheet now passes a third review gate, the visual
+  design gate, before it lands. The agent compares each changed screen with the repository's
+  design system and reference designs, fixes the deviations and repeats until none are left. A
+  Task without UI is recorded as `no-ui`. The Task file carries a `Visual design gate` note, and
+  a Task without it is refused at landing in both merge and merge request modes.
+
+### Changed
+
+- `kaizero` refuses to start when `claude` does not yet trust the target repository, instead of
+  leaving a session stuck on the "Do you trust the files in this folder?" dialog. The error
+  names the folder and tells you to run `claude` there once, accept the dialog, and launch
+  `kaizero` again. A config file that cannot be read is reported as such, not as untrusted.
+  `kaizero` never edits the `claude` config itself.
+
 ## [0.1.9] - 2026-10-04
 
 ### Added
