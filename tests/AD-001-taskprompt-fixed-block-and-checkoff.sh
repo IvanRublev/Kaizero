@@ -45,9 +45,10 @@ order(){ awk '
   /commit that checkoff/{a=NR}
   /ACCEPTANCE CRITERIA GATE/{b=NR}
   /AGENTIC SELF-REVIEW GATE/{c=NR}
+  /VISUAL DESIGN GATE/{v=NR}
   /Acceptance criteria gate: passed/{d=NR}
   /Agentic self-review gate: passed/{e=NR}
-  END{ if (z && a && b && c && d && e && z<a && a<b && b<c && c<d && d<e) print "yes"; else print "NO" }
+  END{ if (z && a && b && c && v && d && e && z<a && a<b && b<c && c<v && v<d && d<e) print "yes"; else print "NO" }
 ' "$1"; }
 check "AD1 fixed block, in order" "$(order "$AD1/noflag.log")" "yes"
 # one evidence-line instruction, before the checkoff commit
