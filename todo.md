@@ -119,5 +119,6 @@ and the ones caused by missing synchronization run concurrently again
 - [x] BUG-086 `kaizero --help` and the README describe `KAIZERO_LINK` as linking directories, where it links any top-level file or directory tasks/BUG-086.md
 - [x] ISSUE-087 Operator names variables in `KZ_COPY_ENV` and `kz-tmux` hands their values from the launching shell to every pane without putting a value on any command line tasks/ISSUE-087.md
 - [x] ISSUE-088 Operator whose target repository `claude` does not trust yet is refused before the first session starts, with the steps to trust it tasks/ISSUE-088.md
+- [ ] ISSUE-089 Agent whose Task changes the UI has the result checked against the repository's design system by a dedicated visual gate before the Task lands tasks/ISSUE-089.md
 - [?] TASK-091 CI proves `mr_list`/`mr_create` still work end to end against a live GitHub repository and a live GitLab project, not only that their flags exist
 - [?] TASK-092 Every `KAIZERO_TEST_ISOLATED=1` test scenario is classified by its actual race, 
