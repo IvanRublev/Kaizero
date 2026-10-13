@@ -46,6 +46,7 @@ Kaizero runs [`claude`](https://claude.com/product/claude-code) on a predefined 
 - **Beats context rot** — session Stop hook SIGTERMs `claude` once its context total crosses a threshold (see [Context rot](#context-rot)) and restarts clean. Fresh context, no quality decay.
 - **One Task per session** — `claude` exits once it has zeroed a single Task and the script restarts it, so every Task runs on a context isolated from the Task before it, which cuts token spend (~20% on a working instance). An instance that has nothing to claim waits in the shell without launching `claude` at all, spending nothing.
 - **Parallel by default** — run many instances at once; they coordinate via git worktrees, each claiming Tasks the others haven't taken.
+- **Three review gates** — Acceptance criteria, Agentic self-review and Visual design; the agent keeps working on a Task until each gate's quality bar is met.
 - **Safe landings** — each Task is handed off as a merge/pull request for a reviewer by default, or landed directly as a local merge to the base branch. Either way the merge-back and the box tick are serialized across instances through `flock`; no races, no corrupted base.
 - **Crash resilient** — if `claude` crashes or is killed mid-Task, its unfinished work isn't lost. The next instance to come by — a peer switching to its next Task, or the same loop restarted — reclaims the branch, finishes it, and merges it back. Work only counts as Landed once it lands on the base branch and its box is checked there.
 - **Named sessions** — every `claude` session is named `(<instance id>) <nick> · <activity>`, shown in the prompt box and the terminal title.
@@ -75,6 +76,14 @@ full `kaizero` command to run in each — it tiles them into one tmux session:
 
 ```sh
 kz-tmux 6 kaizero todo.md
+```
+
+To hand credentials to every agent without a value on any command line, export them in the launching
+shell and name them in `KZ_COPY_ENV` (space-separated); tmux copies the values into each pane's
+environment. Variables of `kaizero` itself stay a `NAME=value` prefix after the pane count:
+
+```sh
+KZ_COPY_ENV="ACC_ID ACC_TOKEN" kz-tmux 2 KAIZERO_LINK=node_modules kaizero todo.md --local-merge
 ```
 
 > ⚠️ Kaizero runs `claude` **unattended with permissions auto-approved** and **commits on its own** to the branch you launch it on. Only ever point it at a Todo list you wrote or reviewed, on a branch with a clean, committed tree — git is your only undo.
@@ -163,6 +172,8 @@ Supported on **macOS and Linux** (the script is bash-3.2-safe, so stock macOS `b
    ```sh
    brew install tmux           # macOS; Linux ships it in most package managers
    ```
+
+4. **A repository `claude` trusts** — an untrusted folder freezes the first session on Claude Code's "Do you trust the files in this folder?" dialog, which nobody answers in an unattended loop. `kaizero` reads Claude Code's config file (`$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`) and refuses the launch when the target repository has no `hasTrustDialogAccepted: true` entry there. To trust it: run `claude` once in the target repository, accept the trust dialog, exit, then launch `kaizero` again.
 
 These prerequisites are guard-checked at startup (the forge's only when the run lands requests, tmux is not checked); the script exits with a clear message if it is missing — including a renamed or dropped `gh`/`glab` flag, caught before a launch, not only in CI.
 

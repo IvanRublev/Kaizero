@@ -23,6 +23,7 @@ SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 TC="$HOME/.kaizero-test-root/C-001-merge-conflict-path"   # fixed, trusted once out-of-band — NOT under $TESTROOT (see TEST.md Prerequisites)
 jq -e --arg p "$TC/repo" '.projects[$p].hasTrustDialogAccepted == true' "$HOME/.claude.json" >/dev/null 2>&1 \
   || { echo "REFUSING: $TC/repo is not trusted in ~/.claude.json — trust it once (see TEST.md Prerequisites) before running this scenario" >&2; exit 1; }
+export TEST_CLAUDE_CONFIG_DIR_KEEP=1   # real claude: keep the operator's real config, where this repo is pre-trusted (see test-setup.sh)
 [ -d "$TC" ] && find "$TC" -mindepth 1 -delete   # reset from any previous run; $TC itself stays (that's the trusted path)
 mkdir -p "$TC/repo"
 write_gate "$TC/gate.sh"

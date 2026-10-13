@@ -7,7 +7,7 @@
 # Run -h for usage.
 set -euo pipefail
 
-VERSION="0.1.9"
+VERSION="0.1.10"
 PROG="$(basename "$0")"   # name shown in usage/errors, from how the script was invoked
 # per-machine state (lifetime landed-Task count, hidden-invitation choice): outside any repository
 # and outside the install location, so a reinstall or upgrade leaves it alone. Also baked into zero.sh.
@@ -1492,6 +1492,34 @@ if [ "$MR_MODE" = 1 ] && [ -z "${KAIZERO_TEST_EMIT:-}" ]; then
     DOCTOR_BOXED=1
     run_doctor mr
     unset DOCTOR_BOXED
+fi
+
+# --- the target must be trusted by claude: an untrusted folder freezes the first session on the
+# "Do you trust the files in this folder?" dialog nobody answers in an unattended loop. Runs last
+# among the launch refusals, once per run, and before anything is written for the run. Claude Code
+# records the decision as projects["<physical path>"].hasTrustDialogAccepted in its config file;
+# read with sed alone (no jq), indentation and line breaks irrelevant. The coordination repository
+# is never consulted, and the file is never written.
+if [ -z "${KAIZERO_TEST_EMIT:-}" ]; then
+    TRUST_FILE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+    TRUST_JSON=""
+    if [ -f "$TRUST_FILE" ]; then
+        if ! { TRUST_JSON="$(tr '\n\r\t' '   ' < "$TRUST_FILE" 2>/dev/null)" && [ -r "$TRUST_FILE" ] \
+            && printf '%s' "$TRUST_JSON" | grep -q '"projects"[[:space:]]*:'; }; then
+            echo "$PROG: Could not read the trust state of '$TARGET_ROOT' — the content of '$TRUST_FILE' could not be read." >&2; exit 1
+        fi
+    fi
+    # JSON-escape the key (backslash, double quote), then escape it again for sed's ERE
+    TRUST_KEY="$(printf '%s' "$TARGET_ROOT" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[][\.*^$/(){}+?|]/\\&/g')"
+    # one line per quoted absolute-path key, so a trust field belongs to the nearest key before it
+    if ! printf '%s' "$TRUST_JSON" \
+         | sed -E 's/"(\/([^"\\]|\\.)*)"[[:space:]]*:[[:space:]]*\{/\
+&/g' \
+         | sed -En "/^\"$TRUST_KEY\"[[:space:]]*:[[:space:]]*\\{/p" \
+         | grep -Eq '"hasTrustDialogAccepted"[[:space:]]*:[[:space:]]*true[[:space:]]*[,}]'; then
+        echo "$PROG: '$TARGET_ROOT' is not trusted by Claude Code — run \`claude\` in that directory, accept the trust dialog, exit it, then launch $PROG again." >&2
+        exit 1
+    fi
 fi
 
 if [ "$MR_MODE" = 1 ]; then
@@ -5179,13 +5207,15 @@ ac_land_gate_findings() {
       for (i = s; i <= e; i++) if (lines[i] ~ /^[ \t]*- \[[xX]\]/) any_ticked = 1
       if (!any_ticked) exit 0
 
-      have_ac = 0; have_sr = 0
+      have_ac = 0; have_sr = 0; have_vd = 0
       for (i = s; i <= e; i++) {
         if (lines[i] ~ /^>[ \t]*Acceptance criteria gate: (passed|failed-manual)/) have_ac = 1
         if (lines[i] ~ /^>[ \t]*Agentic self-review gate: passed/) have_sr = 1
+        if (lines[i] ~ /^>[ \t]*Visual design gate: (passed|no-ui)([ \t]|$)/) have_vd = 1
       }
       if (!have_ac) print "MISSING_GATE\tAcceptance criteria gate"
       if (!have_sr) print "MISSING_GATE\tAgentic self-review gate"
+      if (!have_vd) print "MISSING_GATE\tVisual design gate"
 
       for (i = s; i <= e; i++) {
         if (lines[i] ~ /^[ \t]*- \[[xX]\]/) {
@@ -5204,7 +5234,7 @@ ac_land_gate_findings() {
           # a gate note itself never counts as evidence for a criterion — matched by the same
           # anchored prefix as have_ac/have_sr above, not by a bare gate: substring search (an
           # evidence line own prose may legitimately mention land gate or similar).
-          is_gate_note = (nxt ~ /^>[ \t]*Acceptance criteria gate: (passed|failed-manual)/) || (nxt ~ /^>[ \t]*Agentic self-review gate: passed/)
+          is_gate_note = (nxt ~ /^>[ \t]*Acceptance criteria gate: (passed|failed-manual)/) || (nxt ~ /^>[ \t]*Agentic self-review gate: passed/) || (nxt ~ /^>[ \t]*Visual design gate:/)
           if (!(nxt ~ /^>/) || is_gate_note) print "MISSING_EVIDENCE\t" crit
         }
       }
@@ -7215,13 +7245,25 @@ Keep these facts in mind:
       if your setup defines none, run your own default /code-review skill procedure at minimal effort.
       Fix what it reports, then review the fixed diff again, repeating until a pass reports no new findings.
       Only after that clean pass's output is in hand, write the note as instructed below.
-      Each note is your own gate's record, never a human's review of your work. Both live in one quote
+      VISUAL DESIGN GATE — only when your diff changes a page, component or stylesheet; otherwise write
+      the note as no-ui and skip the rest of this gate. Hand your diff to a subagent that builds and
+      opens the product, views each changed surface in every language or variant the repository ships,
+      at every viewport or device size the repository's design documentation names, compares it with
+      the repository's reference design for that surface, and reports each deviation from the design
+      system (token values, component markup and classes, spacing, shared texts). It drives the product
+      with the first of these you have: (1) the UI-testing or browser-automation tool the repository
+      itself uses; (2) a browser-control tool or skill available to you; (3) Playwright, installed for
+      the run. It names the tool it used. Fix what it reports, then run the gate again until it reports
+      none. Only after the subagent's clean answer is in hand (for no-ui, at once), write the note as
+      instructed below.
+      Each note is your own gate's record, never a human's review of your work. All three live in one quote
       block at the end of the Task file's Acceptance criteria section, one line per gate, each rewritten
-      in place when you re-run that gate, passed|failed|failed-manual depending on that gate's own
+      in place when you re-run that gate, passed|failed|failed-manual|no-ui depending on that gate's own
       outcome:
       > Acceptance criteria gate: passed|failed|failed-manual YYYY-MM-DD HH:MM±HHMM
       > Agentic self-review gate: passed|failed YYYY-MM-DD HH:MM±HHMM
-      Do not leave this step before both gates passed. After gates passed commit the notes with:
+      > Visual design gate: passed|failed|no-ui YYYY-MM-DD HH:MM±HHMM
+      Do not leave this step before all gates passed (the Visual design gate passes as passed or no-ui). After gates passed commit the notes with:
       `@@ZERO_SH@@ commit_ac_checkoff task_id`.@@TASKPROMPT@@
 @@BLOCKED@@
    d. MERGE: `@@ZERO_SH@@ merge task_id "$wt" [symbol]` — pass a symbol only when this session's
@@ -7443,13 +7485,25 @@ Keep these facts in mind:
       if your setup defines none, run your own default /code-review skill procedure at minimal effort.
       Fix what it reports, then review the fixed diff again, repeating until a pass reports no new findings.
       Only after that clean pass's output is in hand, write the note as instructed below.
-      Each note is your own gate's record, never a human's review of your work. Both live in one quote
+      VISUAL DESIGN GATE — only when your diff changes a page, component or stylesheet; otherwise write
+      the note as no-ui and skip the rest of this gate. Hand your diff to a subagent that builds and
+      opens the product, views each changed surface in every language or variant the repository ships,
+      at every viewport or device size the repository's design documentation names, compares it with
+      the repository's reference design for that surface, and reports each deviation from the design
+      system (token values, component markup and classes, spacing, shared texts). It drives the product
+      with the first of these you have: (1) the UI-testing or browser-automation tool the repository
+      itself uses; (2) a browser-control tool or skill available to you; (3) Playwright, installed for
+      the run. It names the tool it used. Fix what it reports, then run the gate again until it reports
+      none. Only after the subagent's clean answer is in hand (for no-ui, at once), write the note as
+      instructed below.
+      Each note is your own gate's record, never a human's review of your work. All three live in one quote
       block at the end of the Task file's Acceptance criteria section, one line per gate, each rewritten
-      in place when you re-run that gate, passed|failed|failed-manual depending on that gate's own
+      in place when you re-run that gate, passed|failed|failed-manual|no-ui depending on that gate's own
       outcome:
       > Acceptance criteria gate: passed|failed|failed-manual YYYY-MM-DD HH:MM±HHMM
       > Agentic self-review gate: passed|failed YYYY-MM-DD HH:MM±HHMM
-      Do not leave this step before both gates passed. After gates passed commit the notes with:
+      > Visual design gate: passed|failed|no-ui YYYY-MM-DD HH:MM±HHMM
+      Do not leave this step before all gates passed (the Visual design gate passes as passed or no-ui). After gates passed commit the notes with:
       `@@ZERO_SH@@ commit_ac_checkoff task_id`.@@TASKPROMPT@@
 @@BLOCKED@@
 @@MR_STEP_D@@

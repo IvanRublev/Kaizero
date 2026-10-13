@@ -26,6 +26,7 @@ SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 T="$HOME/.kaizero-test-root/A-001-parallel-zeroing"   # fixed, trusted once out-of-band — NOT under $TESTROOT (see TEST.md Prerequisites)
 jq -e --arg p "$T/repo" '.projects[$p].hasTrustDialogAccepted == true' "$HOME/.claude.json" >/dev/null 2>&1 \
   || { echo "REFUSING: $T/repo is not trusted in ~/.claude.json — trust it once (see TEST.md Prerequisites) before running this scenario" >&2; exit 1; }
+export TEST_CLAUDE_CONFIG_DIR_KEEP=1   # real claude: keep the operator's real config, where this repo is pre-trusted (see test-setup.sh)
 [ -d "$T" ] && find "$T" -mindepth 1 -delete   # reset from any previous run; $T itself stays (that's the trusted path)
 mkdir -p "$T/repo"
 write_gate "$T/gate.sh"
