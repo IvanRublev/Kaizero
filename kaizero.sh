@@ -1494,6 +1494,33 @@ if [ "$MR_MODE" = 1 ] && [ -z "${KAIZERO_TEST_EMIT:-}" ]; then
     unset DOCTOR_BOXED
 fi
 
+# --- the target must be trusted by claude: an untrusted folder freezes the first session on the
+# "Do you trust the files in this folder?" dialog nobody answers in an unattended loop. Runs last
+# among the launch refusals, once per run, and before anything is written for the run. Claude Code
+# records the decision as projects["<physical path>"].hasTrustDialogAccepted in its config file;
+# read with sed alone (no jq), indentation and line breaks irrelevant. The coordination repository
+# is never consulted, and the file is never written.
+if [ -z "${KAIZERO_TEST_EMIT:-}" ]; then
+    TRUST_FILE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+    TRUST_JSON=""
+    if [ -f "$TRUST_FILE" ]; then
+        TRUST_JSON="$(tr '\n\r\t' '   ' < "$TRUST_FILE" 2>/dev/null)" && [ -r "$TRUST_FILE" ] \
+            && printf '%s' "$TRUST_JSON" | grep -q '"projects"[[:space:]]*:' \
+            || { echo "$PROG: Could not read the trust state of '$TARGET_ROOT' — the content of '$TRUST_FILE' could not be read." >&2; exit 1; }
+    fi
+    # JSON-escape the key (backslash, double quote), then escape it again for sed's ERE
+    TRUST_KEY="$(printf '%s' "$TARGET_ROOT" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[][\.*^$/(){}+?|]/\\&/g')"
+    # one line per quoted absolute-path key, so a trust field belongs to the nearest key before it
+    if ! printf '%s' "$TRUST_JSON" \
+         | sed -E 's/"(\/([^"\\]|\\.)*)"[[:space:]]*:[[:space:]]*\{/\
+&/g' \
+         | sed -En "/^\"$TRUST_KEY\"[[:space:]]*:[[:space:]]*\\{/p" \
+         | grep -Eq '"hasTrustDialogAccepted"[[:space:]]*:[[:space:]]*true[[:space:]]*[,}]'; then
+        echo "$PROG: '$TARGET_ROOT' is not trusted by Claude Code — run \`claude\` in that directory, accept the trust dialog, exit it, then launch $PROG again." >&2
+        exit 1
+    fi
+fi
+
 if [ "$MR_MODE" = 1 ]; then
     if [ "$FORGE" = glab ]; then LAST_STEP="merge request (glab)"; else LAST_STEP="pull request (gh)"; fi
 else
